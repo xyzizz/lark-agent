@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>触发记录 - 飞书智能助手</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">🤖</span><span class="logo-text">飞书智能助手</span></div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item active" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+    </nav>
+  </aside>
+
+  <div class="main-content">
+    <div class="topbar">
+      <span class="topbar-title">触发记录</span>
+      <button class="btn btn-sm btn-default" onclick="loadTriggers()">🔄 刷新</button>
+    </div>
+    <div class="page-content">
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>发送人</th>
+                <th>消息内容</th>
+                <th>意图</th>
+                <th>置信度</th>
+                <th>命中项目</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="triggers-tbody">
+              <tr><td colspan="8" style="text-align:center;color:#999;padding:32px">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="pagination"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 详情模态框 -->
+<div class="modal-overlay" id="detail-modal">
+  <div class="modal" style="width:760px">
+    <div class="modal-header">
+      <span class="modal-title">触发详情</span>
+      <span class="modal-close" onclick="Modal.close('detail-modal')">✕</span>
+    </div>
+    <div id="detail-content" style="max-height:70vh;overflow-y:auto"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+let currentPage = 1;
+const pageSize = 20;
+
+async function loadTriggers(page) {
+  if (page) currentPage = page;
+  const res = await API.get(`/api/triggers?page=${currentPage}&size=${pageSize}`);
+  if (res.code !== 0) { Toast.error(res.message); return; }
+  const { items, total } = res.data;
+  const rows = items || [];
+
+  const tbody = document.getElementById('triggers-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:32px">暂无触发记录</td></tr>';
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(t => `
+    <tr id="tr-${t.id}">
+      <td style="white-space:nowrap">${fmtTime(t.created_at)}</td>
+      <td>${t.sender_name || t.sender_id || '手动'}</td>
+      <td class="td-wrap">${(t.raw_message || '').substring(0, 60)}${(t.raw_message||'').length > 60 ? '...' : ''}</td>
+      <td><span class="badge badge-default">${intentLabel(t.intent) || '-'}</span></td>
+      <td>${t.confidence ? (t.confidence * 100).toFixed(0) + '%' : '-'}</td>
+      <td>${t.matched_project || '-'}</td>
+      <td>${statusBadge(t.status)}</td>
+      <td><button class="btn btn-sm btn-default" onclick="showDetail('${t.id}')">详情</button></td>
+    </tr>
+  `).join('');
+
+  renderPagination('pagination', total, currentPage, pageSize, loadTriggers);
+}
+
+async function showDetail(id) {
+  const res = await API.get(`/api/triggers/${id}`);
+  if (res.code !== 0) { Toast.error(res.message); return; }
+  const t = res.data;
+
+  const typeIcon = { info:'ℹ️', llm:'🧠', tool_call:'🔧', shell:'💻', git:'📦', feishu:'💬' };
+  const stepsHTML = (t.steps || []).map(s => `
+    <div class="step-item">
+      <div class="step-header" onclick="toggleStep('${s.id}')">
+        ${typeIcon[s.step_type] || '▸'} <strong>${s.step_name}</strong>
+        <span class="badge badge-${s.status === 'success' ? 'success' : s.status === 'failed' ? 'error' : 'default'}" style="margin-left:auto">${s.status}</span>
+        <span style="font-size:12px;color:#999">${fmtTime(s.started_at)}</span>
+      </div>
+      <div class="step-body" id="step-${s.id}">
+        ${s.input_data ? `<div><strong>输入：</strong><pre>${escHtml(s.input_data)}</pre></div>` : ''}
+        ${s.output_data ? `<div style="margin-top:8px"><strong>输出：</strong><pre>${escHtml(s.output_data)}</pre></div>` : ''}
+        ${s.error_msg ? `<div style="margin-top:8px;color:var(--error)"><strong>错误：</strong>${escHtml(s.error_msg)}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('detail-content').innerHTML = `
+    <div style="margin-bottom:16px">
+      <div class="form-row">
+        <div><strong>状态：</strong>${statusBadge(t.status)}</div>
+        <div><strong>意图：</strong>${intentLabel(t.intent)}</div>
+        <div><strong>置信度：</strong>${t.confidence ? (t.confidence*100).toFixed(0)+'%' : '-'}</div>
+      </div>
+      <div style="margin-top:12px"><strong>原始消息：</strong>
+        <div style="background:#f5f5f5;padding:10px;border-radius:4px;margin-top:4px">${escHtml(t.raw_message)}</div>
+      </div>
+      ${t.result_summary ? `<div style="margin-top:12px"><strong>执行摘要：</strong>
+        <div style="background:#f5f5f5;padding:10px;border-radius:4px;margin-top:4px;white-space:pre-wrap">${escHtml(t.result_summary)}</div>
+      </div>` : ''}
+      ${t.mr_link ? `<div style="margin-top:12px"><strong>MR 链接：</strong> <a href="${t.mr_link}" target="_blank">${t.mr_link}</a></div>` : ''}
+      ${t.sql_suggestions && t.sql_suggestions !== '[]' ? `<div style="margin-top:12px"><strong>SQL 建议：</strong><pre>${escHtml(t.sql_suggestions)}</pre></div>` : ''}
+      ${t.error_msg ? `<div style="margin-top:12px;color:var(--error)"><strong>错误信息：</strong>${escHtml(t.error_msg)}</div>` : ''}
+    </div>
+    <div>
+      <strong>执行步骤（${(t.steps||[]).length} 步）：</strong>
+      <div class="step-list" style="margin-top:10px">${stepsHTML || '<div style="color:#999">无步骤记录</div>'}</div>
+    </div>
+  `;
+  Modal.open('detail-modal');
+}
+
+function toggleStep(id) {
+  const el = document.getElementById('step-' + id);
+  if (el) el.classList.toggle('show');
+}
+
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 自动定位到 hash 指定的 trigger
+if (location.hash) {
+  const id = location.hash.slice(1);
+  if (id) setTimeout(() => showDetail(id), 800);
+}
+
+loadTriggers(1);
+</script>
+</body>
+</html>

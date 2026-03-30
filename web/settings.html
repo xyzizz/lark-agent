@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>飞书配置 - 飞书智能助手</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">🤖</span><span class="logo-text">飞书智能助手</span></div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item active" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+    </nav>
+  </aside>
+
+  <div class="main-content">
+    <div class="topbar"><span class="topbar-title">飞书 & LLM 配置</span></div>
+    <div class="page-content">
+
+      <!-- 飞书应用配置 -->
+      <div class="card">
+        <div class="card-title">飞书应用配置</div>
+        <div class="alert alert-info">
+          配置说明：在 <strong>飞书开放平台</strong> 创建企业自建应用后，填入以下信息。Webhook 地址为：<code>http://你的服务地址/webhook/feishu</code>
+        </div>
+        <form id="feishu-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">App ID <span style="color:red">*</span></label>
+              <input class="form-input" name="feishu_app_id" placeholder="cli_xxxxxxxxxx">
+            </div>
+            <div class="form-group">
+              <label class="form-label">App Secret <span style="color:red">*</span></label>
+              <input class="form-input" type="password" name="feishu_app_secret" placeholder="••••••••">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Verification Token（可选）</label>
+              <input class="form-input" name="feishu_verification_token" placeholder="webhook 验证 token">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Encrypt Key（可选）</label>
+              <input class="form-input" type="password" name="feishu_encrypt_key" placeholder="消息加密 key">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">机器人 Open ID（群聊 @ 过滤）</label>
+              <input class="form-input" name="feishu_bot_open_id" placeholder="ou_xxxxxxxxxx，空则接收所有消息">
+            </div>
+            <div class="form-group">
+              <label class="form-label">机器人 Webhook（可选，主动推送）</label>
+              <input class="form-input" name="feishu_bot_webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button type="button" class="btn btn-primary" onclick="saveSettings('feishu-form', ['feishu_app_id','feishu_app_secret','feishu_verification_token','feishu_encrypt_key','feishu_bot_open_id','feishu_bot_webhook'])">💾 保存配置</button>
+            <button type="button" class="btn btn-default" onclick="testFeishu()">🔌 测试连接</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- LLM 配置 -->
+      <div class="card">
+        <div class="card-title">LLM 配置（Claude API）</div>
+        <form id="llm-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">API Key <span style="color:red">*</span></label>
+              <input class="form-input" type="password" name="llm_api_key" placeholder="sk-ant-api03-...">
+            </div>
+            <div class="form-group">
+              <label class="form-label">模型</label>
+              <select class="form-select" name="llm_model">
+                <option value="claude-opus-4-6">claude-opus-4-6（推荐）</option>
+                <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+                <option value="claude-haiku-4-5-20251001">claude-haiku-4-5（快速）</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">API Base URL</label>
+              <input class="form-input" name="llm_base_url" placeholder="https://api.anthropic.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Max Tokens</label>
+              <input class="form-input" type="number" name="llm_max_tokens" value="4096">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button type="button" class="btn btn-primary" onclick="saveSettings('llm-form', ['llm_api_key','llm_model','llm_base_url','llm_max_tokens'])">💾 保存配置</button>
+            <button type="button" class="btn btn-default" onclick="testLLM()">🔌 测试连接</button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+async function loadSettings() {
+  const res = await API.get('/api/settings');
+  if (res.code !== 0) return;
+  const s = res.data;
+
+  // 飞书配置
+  ['feishu_app_id','feishu_verification_token','feishu_bot_open_id','feishu_bot_webhook'].forEach(k => {
+    const el = document.querySelector(`[name="${k}"]`);
+    if (el) el.value = s[k] || '';
+  });
+  // 密码字段不回显明文，只显示占位符
+  if (s.feishu_app_secret) {
+    document.querySelector('[name="feishu_app_secret"]').placeholder = '已配置（输入新值以覆盖）';
+  }
+  if (s.feishu_encrypt_key) {
+    document.querySelector('[name="feishu_encrypt_key"]').placeholder = '已配置（输入新值以覆盖）';
+  }
+
+  // LLM 配置
+  if (s.llm_api_key) {
+    document.querySelector('[name="llm_api_key"]').placeholder = '已配置（输入新值以覆盖）';
+  }
+  if (s.llm_model) {
+    document.querySelector('[name="llm_model"]').value = s.llm_model;
+  }
+  if (s.llm_base_url) {
+    document.querySelector('[name="llm_base_url"]').value = s.llm_base_url;
+  }
+  if (s.llm_max_tokens) {
+    document.querySelector('[name="llm_max_tokens"]').value = s.llm_max_tokens;
+  }
+}
+
+async function saveSettings(formId, keys) {
+  const allData = formData(formId);
+  const data = {};
+  keys.forEach(k => {
+    if (allData[k] !== undefined && allData[k] !== '') {
+      data[k] = allData[k];
+    }
+  });
+  const res = await API.post('/api/settings', data);
+  if (res.code === 0) {
+    Toast.success('配置已保存');
+  } else {
+    Toast.error('保存失败：' + res.message);
+  }
+}
+
+async function testLLM() {
+  const btn = event.target;
+  const form = document.getElementById('llm-form');
+  // 直接读当前输入框的值，不依赖保存
+  const apiKey = form.querySelector('[name="llm_api_key"]').value.trim();
+  const baseUrl = form.querySelector('[name="llm_base_url"]').value.trim();
+  const model = form.querySelector('[name="llm_model"]').value.trim();
+  const maxTokens = parseInt(form.querySelector('[name="llm_max_tokens"]').value) || 4096;
+
+  if (!apiKey) {
+    Toast.info('请先填写 API Key');
+    return;
+  }
+  setLoading(btn, true);
+  try {
+    const res = await API.post('/api/test/llm', { api_key: apiKey, base_url: baseUrl, model, max_tokens: maxTokens });
+    if (res.code === 0) Toast.success(res.message);
+    else Toast.error('连接失败：' + res.message);
+  } finally {
+    setLoading(btn, false);
+  }
+}
+
+async function testFeishu() {
+  const btn = event.target;
+  setLoading(btn, true);
+  try {
+    const res = await API.post('/api/test/feishu', {});
+    if (res.code === 0) Toast.success('飞书连接成功 ✅');
+    else Toast.error('连接失败：' + res.message);
+  } finally {
+    setLoading(btn, false);
+  }
+}
+
+loadSettings();
+</script>
+</body>
+</html>

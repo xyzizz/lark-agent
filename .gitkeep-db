@@ -1,0 +1,3 @@
+此文件说明：feishu-agent.db 在首次启动时自动创建，无需手动创建。
+数据库路径由 config.yaml 中的 database.path 配置（默认 ./feishu-agent.db）。
+数据库包含运行时敏感配置（API Key、App Secret 等），已加入 .gitignore，请勿提交。

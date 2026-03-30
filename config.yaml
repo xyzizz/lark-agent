@@ -1,0 +1,43 @@
+# feishu-agent 配置文件
+# 启动时加载，优先级低于 SQLite 中的动态配置
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+
+feishu:
+  app_id: ""
+  app_secret: ""
+  verification_token: ""
+  encrypt_key: ""
+  # 机器人 webhook（可选，用于主动推送）
+  bot_webhook: ""
+
+llm:
+  # Claude API 配置
+  api_key: ""
+  base_url: "https://api.anthropic.com"
+  model: "claude-opus-4-6"
+  max_tokens: 4096
+  timeout_seconds: 60
+
+database:
+  path: "./feishu-agent.db"
+
+# Agent 执行约束（Harness）
+harness:
+  auto_commit: false
+  auto_push: false
+  auto_create_mr: false
+  allow_db_write: false
+  allow_auto_merge: false
+  require_plan_before_exec: true
+  dry_run: false
+  max_steps: 20
+  # 高风险动作必须人工确认
+  require_confirm_on_risky: true
+
+log:
+  level: "info"  # debug | info | warn | error
+  path: "./logs/feishu-agent.log"

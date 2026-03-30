@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>飞书智能助手 - 仪表盘</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-icon">🤖</span>
+      <span class="logo-text">飞书智能助手</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+    </nav>
+  </aside>
+
+  <!-- 主内容 -->
+  <div class="main-content">
+    <div class="topbar">
+      <span class="topbar-title">仪表盘</span>
+      <div style="display:flex;gap:8px">
+        <span id="svc-status" class="badge badge-default">检查中...</span>
+        <button class="btn btn-sm btn-default" onclick="loadDashboard()">🔄 刷新</button>
+      </div>
+    </div>
+
+    <div class="page-content">
+      <!-- 统计卡片 -->
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card"><div class="stat-value" id="stat-total">-</div><div class="stat-label">总触发次数</div></div>
+        <div class="stat-card stat-success"><div class="stat-value" id="stat-success">-</div><div class="stat-label">成功次数</div></div>
+        <div class="stat-card stat-error"><div class="stat-value" id="stat-failed">-</div><div class="stat-label">失败次数</div></div>
+        <div class="stat-card stat-warning"><div class="stat-value" id="stat-pending">-</div><div class="stat-label">处理中</div></div>
+      </div>
+
+      <!-- 快捷测试 -->
+      <div class="card">
+        <div class="card-title">快捷测试</div>
+        <div class="form-group">
+          <label class="form-label">测试消息（模拟飞书消息内容）</label>
+          <textarea id="test-msg" class="form-textarea" rows="3" placeholder="例如：用户登录报错 500，请帮我排查一下"></textarea>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="testIntent()">🧠 测试意图识别</button>
+          <button class="btn btn-default" onclick="manualTrigger()">▶️ 手动触发工作流</button>
+        </div>
+        <div id="test-result" style="margin-top:16px;display:none"></div>
+      </div>
+
+      <!-- 最近触发记录 -->
+      <div class="card">
+        <div class="card-title">
+          最近触发记录
+          <a href="/triggers" class="btn btn-sm btn-default">查看全部</a>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>发送人</th>
+                <th>消息摘要</th>
+                <th>意图</th>
+                <th>命中项目</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="recent-triggers">
+              <tr><td colspan="7" style="text-align:center;color:#999;padding:24px">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+async function loadDashboard() {
+  try {
+    const res = await API.get('/api/dashboard');
+    if (res.code !== 0) { Toast.error(res.message); return; }
+    const d = res.data;
+
+    document.getElementById('stat-total').textContent = d.total_triggers || 0;
+    document.getElementById('stat-success').textContent = d.success_count || 0;
+    document.getElementById('stat-failed').textContent = d.failed_count || 0;
+    document.getElementById('stat-pending').textContent = d.pending_count || 0;
+
+    const svcEl = document.getElementById('svc-status');
+    svcEl.textContent = d.service_status === 'running' ? '● 运行中' : '● 已停止';
+    svcEl.className = 'badge ' + (d.service_status === 'running' ? 'badge-success' : 'badge-error');
+
+    const tbody = document.getElementById('recent-triggers');
+    const rows = d.recent_triggers || [];
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:24px">暂无触发记录</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(t => `
+      <tr>
+        <td>${fmtTime(t.created_at)}</td>
+        <td>${t.sender_name || t.sender_id || '-'}</td>
+        <td class="td-wrap">${(t.raw_message || '').substring(0, 60)}${t.raw_message?.length > 60 ? '...' : ''}</td>
+        <td>${intentLabel(t.intent)}</td>
+        <td>${t.matched_project || '-'}</td>
+        <td>${statusBadge(t.status)}</td>
+        <td><a href="/triggers#${t.id}" class="btn btn-sm btn-default">详情</a></td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    Toast.error('加载失败：' + e.message);
+  }
+}
+
+async function testIntent() {
+  const msg = document.getElementById('test-msg').value.trim();
+  if (!msg) { Toast.info('请输入测试消息'); return; }
+  const btn = event.target;
+  setLoading(btn, true);
+  try {
+    const res = await API.post('/api/test/intent', { message: msg });
+    const el = document.getElementById('test-result');
+    el.style.display = 'block';
+    if (res.code === 0) {
+      const d = res.data;
+      el.innerHTML = `
+        <div class="alert alert-success">
+          <strong>意图：</strong>${intentLabel(d.intent)} (置信度: ${(d.confidence * 100).toFixed(0)}%)<br>
+          <strong>摘要：</strong>${d.summary}<br>
+          <strong>风险等级：</strong>${d.risk_level}<br>
+          <strong>命中关键词：</strong>${(d.matched_keywords || []).join(', ') || '无'}<br>
+          <strong>疑似项目：</strong>${d.suspected_project || '未知'}
+        </div>`;
+    } else {
+      el.innerHTML = `<div class="alert alert-error">识别失败：${res.message}</div>`;
+    }
+  } catch(e) {
+    Toast.error(e.message);
+  } finally {
+    setLoading(btn, false);
+  }
+}
+
+async function manualTrigger() {
+  const msg = document.getElementById('test-msg').value.trim();
+  if (!msg) { Toast.info('请输入消息内容'); return; }
+  const btn = event.target;
+  setLoading(btn, true);
+  try {
+    const res = await API.post('/api/manual/trigger', { message: msg, sender_name: '手动触发', chat_id: 'test' });
+    if (res.code === 0) {
+      Toast.success('已提交，正在后台处理，请在"触发记录"页查看结果');
+    } else {
+      Toast.error(res.message);
+    }
+  } catch(e) {
+    Toast.error(e.message);
+  } finally {
+    setLoading(btn, false);
+  }
+}
+
+loadDashboard();
+// 每 30 秒自动刷新
+setInterval(loadDashboard, 30000);
+</script>
+</body>
+</html>

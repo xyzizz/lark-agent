@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>执行策略 - 飞书智能助手</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">🤖</span><span class="logo-text">飞书智能助手</span></div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item active" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+    </nav>
+  </aside>
+
+  <div class="main-content">
+    <div class="topbar"><span class="topbar-title">Harness 执行策略配置</span></div>
+    <div class="page-content">
+      <div class="alert alert-info">
+        ⚠️ <strong>安全提醒：</strong>系统默认偏保守策略。启用自动推送/MR 创建等操作前，请确认你已充分测试。所有高风险操作都会记录到审计日志。
+      </div>
+
+      <!-- 执行权限配置 -->
+      <div class="card">
+        <div class="card-title">执行权限（默认保守，按需开启）</div>
+        <form id="harness-form">
+          <table style="width:100%;border-collapse:collapse">
+            <tbody>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;width:60%">
+                  <strong>允许自动 Commit</strong><br>
+                  <span style="color:#888;font-size:13px">Agent 修改代码后自动执行 git commit</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_auto_commit"><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0">
+                  <strong>允许自动 Push</strong><br>
+                  <span style="color:#888;font-size:13px">代码提交后自动推送到远端（需先开启自动 Commit）</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_auto_push"><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0">
+                  <strong>允许自动创建 MR/PR</strong><br>
+                  <span style="color:#888;font-size:13px">Push 后自动创建 Merge Request（需先开启自动 Push）</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_auto_create_mr"><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0">
+                  <strong>允许执行数据库写操作</strong><br>
+                  <span style="color:#888;font-size:13px">⚠️ 高危：允许 Agent 直接执行 INSERT/UPDATE/DELETE（默认禁止）</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_allow_db_write"><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0">
+                  <strong>允许自动 Merge MR</strong><br>
+                  <span style="color:#888;font-size:13px">⚠️ 高危：创建 MR 后自动 Merge（默认禁止）</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_allow_auto_merge"><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0">
+                  <strong>高风险动作须人工确认</strong><br>
+                  <span style="color:#888;font-size:13px">识别到高风险意图时，不执行，发飞书消息等待确认</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_require_confirm_on_risky" checked><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0">
+                  <strong>先出计划再执行代码修改</strong><br>
+                  <span style="color:#888;font-size:13px">要求 Agent 先生成修改计划，审阅后再执行</span>
+                </td>
+                <td style="padding:12px 0;border-bottom:1px solid #f0f0f0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_require_plan_before_exec" checked><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:12px 0">
+                  <strong>Dry Run 模式</strong><br>
+                  <span style="color:#888;font-size:13px">只生成计划和分析，不实际修改代码/推送/创建 MR</span>
+                </td>
+                <td style="padding:12px 0;text-align:right">
+                  <label class="toggle"><input type="checkbox" name="harness_dry_run"><span class="toggle-slider"></span></label>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="form-group" style="margin-top:20px">
+            <label class="form-label">最大执行步骤数（防止无限循环）</label>
+            <input class="form-input" type="number" name="harness_max_steps" value="20" min="1" max="100" style="max-width:200px">
+          </div>
+
+          <button type="button" class="btn btn-primary" onclick="saveHarness()">💾 保存策略</button>
+        </form>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+async function loadHarness() {
+  const res = await API.get('/api/settings');
+  if (res.code !== 0) return;
+  const s = res.data;
+  const form = document.getElementById('harness-form');
+  const boolKeys = [
+    'harness_auto_commit','harness_auto_push','harness_auto_create_mr',
+    'harness_allow_db_write','harness_allow_auto_merge',
+    'harness_require_confirm_on_risky','harness_require_plan_before_exec','harness_dry_run'
+  ];
+  boolKeys.forEach(k => {
+    const el = form.querySelector(`[name="${k}"]`);
+    if (el) el.checked = s[k] === 'true' || s[k] === '1';
+  });
+  if (s.harness_max_steps) form.querySelector('[name="harness_max_steps"]').value = s.harness_max_steps;
+}
+
+async function saveHarness() {
+  const form = document.getElementById('harness-form');
+  const data = {};
+  const boolKeys = [
+    'harness_auto_commit','harness_auto_push','harness_auto_create_mr',
+    'harness_allow_db_write','harness_allow_auto_merge',
+    'harness_require_confirm_on_risky','harness_require_plan_before_exec','harness_dry_run'
+  ];
+  boolKeys.forEach(k => {
+    const el = form.querySelector(`[name="${k}"]`);
+    if (el) data[k] = el.checked ? 'true' : 'false';
+  });
+  data.harness_max_steps = form.querySelector('[name="harness_max_steps"]').value;
+
+  const res = await API.post('/api/settings', data);
+  if (res.code === 0) Toast.success('策略已保存');
+  else Toast.error(res.message);
+}
+
+loadHarness();
+</script>
+</body>
+</html>

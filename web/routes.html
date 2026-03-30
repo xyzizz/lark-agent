@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目路由 - 飞书智能助手</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">🤖</span><span class="logo-text">飞书智能助手</span></div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item active" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+    </nav>
+  </aside>
+
+  <div class="main-content">
+    <div class="topbar"><span class="topbar-title">项目路由配置</span></div>
+    <div class="page-content">
+      <div class="card">
+        <div class="card-title">
+          项目路由列表
+          <button class="btn btn-primary btn-sm" onclick="openCreateModal()">+ 新建路由</button>
+        </div>
+        <div class="alert alert-info">
+          关键词匹配说明：当飞书消息包含关键词时，将路由到对应项目。多关键词命中数量越多，优先级越高。
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>项目名</th>
+                <th>关键词</th>
+                <th>本地仓库路径</th>
+                <th>优先级</th>
+                <th>MCP</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="routes-tbody">
+              <tr><td colspan="7" style="text-align:center;color:#999;padding:24px">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 新建/编辑模态框 -->
+<div class="modal-overlay" id="route-modal">
+  <div class="modal" style="width:640px">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">新建路由</span>
+      <span class="modal-close" onclick="Modal.close('route-modal')">✕</span>
+    </div>
+    <form id="route-form">
+      <input type="hidden" name="id">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">项目名 <span style="color:red">*</span></label>
+          <input class="form-input" name="name" placeholder="如：order-service">
+        </div>
+        <div class="form-group">
+          <label class="form-label">优先级（数字越大越优先）</label>
+          <input class="form-input" type="number" name="priority" value="0">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">关键词（逗号分隔）</label>
+        <input class="form-input" name="keywords_str" placeholder="订单, order, 支付, pay">
+      </div>
+      <div class="form-group">
+        <label class="form-label">本地仓库路径 <span style="color:red">*</span></label>
+        <input class="form-input" name="repo_path" placeholder="/Users/me/projects/order-service">
+      </div>
+      <div class="form-group">
+        <label class="form-label">远端仓库 URL（用于创建 MR）</label>
+        <input class="form-input" name="remote_url" placeholder="https://gitlab.com/org/order-service">
+      </div>
+      <div class="form-group">
+        <label class="form-label">文档来源（飞书文档 URL 或 token）</label>
+        <input class="form-input" name="doc_source" placeholder="https://xxx.feishu.cn/docx/xxxtoken">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">关联 MCP（逗号分隔）</label>
+          <input class="form-input" name="mcp_list_str" placeholder="mysql-mcp, redis-mcp">
+        </div>
+        <div class="form-group">
+          <label class="form-label">关联 Skills（逗号分隔）</label>
+          <input class="form-input" name="skill_list_str" placeholder="lark-doc, lark-base">
+        </div>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <label class="toggle">
+            <input type="checkbox" name="enabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <span>启用此路由</span>
+        </label>
+      </div>
+    </form>
+    <div class="modal-footer">
+      <button class="btn btn-default" onclick="Modal.close('route-modal')">取消</button>
+      <button class="btn btn-primary" onclick="saveRoute()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+let editingId = null;
+
+async function loadRoutes() {
+  const res = await API.get('/api/routes');
+  if (res.code !== 0) { Toast.error(res.message); return; }
+  const rows = res.data || [];
+  const tbody = document.getElementById('routes-tbody');
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:24px">暂无路由，请点击"新建路由"添加</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><strong>${r.name}</strong></td>
+      <td class="td-wrap">${(r.keywords || []).map(k => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:4px;margin:2px;display:inline-block;font-size:12px">${k}</span>`).join('')}</td>
+      <td class="td-wrap" style="font-family:monospace;font-size:12px">${r.repo_path || '-'}</td>
+      <td>${r.priority}</td>
+      <td>${(r.mcp_list || []).join(', ') || '-'}</td>
+      <td>${r.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-default">禁用</span>'}</td>
+      <td>
+        <button class="btn btn-sm btn-default" onclick="editRoute(${JSON.stringify(r).replace(/"/g, '&quot;')})">编辑</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteRoute('${r.id}', '${r.name}')">删除</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openCreateModal() {
+  editingId = null;
+  document.getElementById('modal-title').textContent = '新建路由';
+  document.getElementById('route-form').reset();
+  document.querySelector('[name="enabled"]').checked = true;
+  Modal.open('route-modal');
+}
+
+function editRoute(r) {
+  editingId = r.id;
+  document.getElementById('modal-title').textContent = '编辑路由 - ' + r.name;
+  const form = document.getElementById('route-form');
+  form.querySelector('[name="name"]').value = r.name;
+  form.querySelector('[name="priority"]').value = r.priority;
+  form.querySelector('[name="keywords_str"]').value = joinTags(r.keywords);
+  form.querySelector('[name="repo_path"]').value = r.repo_path;
+  form.querySelector('[name="remote_url"]').value = r.remote_url || '';
+  form.querySelector('[name="doc_source"]').value = r.doc_source || '';
+  form.querySelector('[name="mcp_list_str"]').value = joinTags(r.mcp_list);
+  form.querySelector('[name="skill_list_str"]').value = joinTags(r.skill_list);
+  form.querySelector('[name="enabled"]').checked = r.enabled;
+  Modal.open('route-modal');
+}
+
+async function saveRoute() {
+  const form = document.getElementById('route-form');
+  const data = {
+    name: form.querySelector('[name="name"]').value.trim(),
+    priority: parseInt(form.querySelector('[name="priority"]').value) || 0,
+    keywords: splitTags(form.querySelector('[name="keywords_str"]').value),
+    repo_path: form.querySelector('[name="repo_path"]').value.trim(),
+    remote_url: form.querySelector('[name="remote_url"]').value.trim(),
+    doc_source: form.querySelector('[name="doc_source"]').value.trim(),
+    mcp_list: splitTags(form.querySelector('[name="mcp_list_str"]').value),
+    skill_list: splitTags(form.querySelector('[name="skill_list_str"]').value),
+    enabled: form.querySelector('[name="enabled"]').checked,
+  };
+  if (!data.name) { Toast.info('请填写项目名'); return; }
+  if (!data.repo_path) { Toast.info('请填写仓库路径'); return; }
+
+  let res;
+  if (editingId) {
+    res = await API.put(`/api/routes/${editingId}`, data);
+  } else {
+    res = await API.post('/api/routes', data);
+  }
+
+  if (res.code === 0) {
+    Toast.success(editingId ? '更新成功' : '创建成功');
+    Modal.close('route-modal');
+    loadRoutes();
+  } else {
+    Toast.error(res.message);
+  }
+}
+
+async function deleteRoute(id, name) {
+  if (!window.confirm(`确认删除路由「${name}」？`)) return;
+  const res = await API.delete(`/api/routes/${id}`);
+  if (res.code === 0) {
+    Toast.success('删除成功');
+    loadRoutes();
+  } else {
+    Toast.error(res.message);
+  }
+}
+
+loadRoutes();
+</script>
+</body>
+</html>
