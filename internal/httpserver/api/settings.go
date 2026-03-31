@@ -76,6 +76,9 @@ func applySettingsToConfig(kvs map[string]string) {
 		if v := kvs["feishu_bot_webhook"]; v != "" {
 			c.Feishu.BotWebhook = v
 		}
+		if v := kvs["feishu_event_mode"]; v != "" {
+			c.Feishu.EventMode = v
+		}
 		if v := kvs["llm_api_key"]; v != "" {
 			c.LLM.APIKey = v
 		}
@@ -95,11 +98,24 @@ func applySettingsToConfig(kvs map[string]string) {
 	})
 }
 
-// TestFeishu POST /api/test/feishu
+// TestFeishu POST /api/test/feishu — 用请求体中的参数直接测试飞书连通性
+// 请求体字段优先，缺省时回退到已保存的配置
 func TestFeishu(c *gin.Context) {
+	var req struct {
+		AppID     string `json:"app_id"`
+		AppSecret string `json:"app_secret"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
 	cfg := config.Get()
-	appID := cfg.Feishu.AppID
-	appSecret := cfg.Feishu.AppSecret
+	appID := req.AppID
+	if appID == "" {
+		appID = cfg.Feishu.AppID
+	}
+	appSecret := req.AppSecret
+	if appSecret == "" {
+		appSecret = cfg.Feishu.AppSecret
+	}
 	if appID == "" || appSecret == "" {
 		c.JSON(http.StatusOK, model.APIResponse{Code: 1, Message: "飞书 App ID 或 App Secret 未配置"})
 		return

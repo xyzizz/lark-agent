@@ -1,0 +1,6 @@
+{
+  "description": "示例 MCP 服务",
+  "command": "mock",
+  "args_template": {},
+  "enabled": true
+}

@@ -4,11 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"feishu-agent/internal/model"
+	"feishu-agent/internal/store"
 	"fmt"
+	"log"
 	"net/http"
 )
 
 // ─── 消息发送 ─────────────────────────────────────────────────
+
+// sendMessageResponse 飞书发送消息 API 响应
+type sendMessageResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		MessageID string `json:"message_id"`
+		ChatID    string `json:"chat_id"`
+	} `json:"data"`
+}
 
 // SendTextMessage 向指定会话发送文本消息
 func (c *Client) SendTextMessage(ctx context.Context, chatID, text string) error {
@@ -36,16 +49,16 @@ func (c *Client) SendTextMessage(ctx context.Context, chatID, text string) error
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-	}
+	var result sendMessageResponse
 	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return err
 	}
 	if result.Code != 0 {
 		return fmt.Errorf("feishu send error %d: %s", result.Code, result.Msg)
 	}
+
+	// 记录发出的消息
+	saveChatMessage(result.Data.MessageID, chatID, "text", text)
 	return nil
 }
 
@@ -78,6 +91,18 @@ func (c *Client) SendCardMessage(ctx context.Context, chatID string, card *CardM
 		return fmt.Errorf("send card: %w", err)
 	}
 	defer resp.Body.Close()
+
+	var result sendMessageResponse
+	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("feishu send card error %d: %s", result.Code, result.Msg)
+	}
+
+	// 记录发出的卡片消息（用标题作为摘要）
+	summary := card.Header.Title.Content
+	saveChatMessage(result.Data.MessageID, chatID, "interactive", summary)
 	return nil
 }
 
@@ -181,5 +206,19 @@ func BuildResultCard(title, intent, summary, mrLink string, sqlSuggestions []str
 			Template: template,
 		},
 		Elements: elements,
+	}
+}
+
+// saveChatMessage 记录机器人发出的消息到 DB
+func saveChatMessage(messageID, chatID, msgType, content string) {
+	if err := store.SaveChatMessage(&model.ChatMessage{
+		Direction: "outgoing",
+		ChatID:    chatID,
+		ChatType:  "p2p",
+		MessageID: messageID,
+		MsgType:   msgType,
+		Content:   content,
+	}); err != nil {
+		log.Printf("[sender] save outgoing message: %v", err)
 	}
 }

@@ -46,7 +46,18 @@ func (s *Server) InitFeishu(appID, appSecret string) {
 	s.feishuClient = feishu.NewClient(appID, appSecret)
 	s.runner = workflow.NewRunner(s.feishuClient)
 	api.SetRunner(s.runner)
+	api.SetFeishuClient(s.feishuClient)
 	log.Printf("[server] feishu client initialized, app_id=%s", appID)
+}
+
+// GetRunner 返回工作流 Runner（供 WebSocket 客户端使用）
+func (s *Server) GetRunner() *workflow.Runner {
+	return s.runner
+}
+
+// GetFeishuClient 返回飞书客户端（供 WebSocket 客户端使用）
+func (s *Server) GetFeishuClient() *feishu.Client {
+	return s.feishuClient
 }
 
 // Run 启动服务
@@ -67,6 +78,11 @@ func (s *Server) setup() {
 	r.StaticFile("/tools", "./web/tools.html")
 	r.StaticFile("/harness", "./web/harness.html")
 	r.StaticFile("/triggers", "./web/triggers.html")
+	r.StaticFile("/messages", "./web/messages.html")
+	r.StaticFile("/terminal", "./web/terminal.html")
+
+	// ─── WebSocket 终端 ──────────────────────────────────────────
+	r.GET("/ws/terminal", s.handleTerminal)
 
 	// ─── 飞书 Webhook ────────────────────────────────────────────
 	r.POST("/webhook/feishu", s.handleFeishuWebhook)
@@ -101,6 +117,15 @@ func (s *Server) setup() {
 		// 触发记录
 		apiGroup.GET("/triggers", api.ListTriggers)
 		apiGroup.GET("/triggers/:id", api.GetTrigger)
+		apiGroup.GET("/triggers/:id/logs", api.GetTriggerLogs)
+		apiGroup.POST("/triggers/:id/cancel", api.CancelTrigger)
+		apiGroup.GET("/jobs/active", api.ListActiveJobs)
+
+		// 对话记录
+		apiGroup.GET("/messages", api.ListMessages)
+
+		// 用户名解析
+		apiGroup.GET("/users/resolve", api.ResolveUsers)
 
 		// 测试接口
 		apiGroup.POST("/test/intent", api.TestIntent)
@@ -199,13 +224,30 @@ func (s *Server) handleFeishuWebhook(c *gin.Context) {
 		return
 	}
 
-	// 获取机器人 open_id（从配置）
-	botOpenID := settings["feishu_bot_open_id"]
+	// 群聊消息过滤：默认只接受私聊，feishu_allow_group=true 时才处理群聊
+	if msgEvent.Message.ChatType == "group" {
+		if settings["feishu_allow_group"] != "true" {
+			c.JSON(http.StatusOK, gin.H{"msg": "group message ignored"})
+			return
+		}
+		// 群聊模式下仍需 @机器人 才触发
+		botOpenID := settings["feishu_bot_open_id"]
+		if !isMentioned(msgEvent.Message.Mentions, botOpenID) {
+			c.JSON(http.StatusOK, gin.H{"msg": "not mentioned"})
+			return
+		}
+	}
 
-	// 群聊时只处理 @机器人 的消息
-	if msgEvent.Message.ChatType == "group" && !isMentioned(msgEvent.Message.Mentions, botOpenID) {
-		c.JSON(http.StatusOK, gin.H{"msg": "not mentioned"})
-		return
+	// 发送者白名单过滤（私聊 + 群聊通用）
+	if allowed := settings["feishu_allowed_senders"]; allowed != "" {
+		senderID := ""
+		if msgEvent.Sender.SenderID != nil {
+			senderID = msgEvent.Sender.SenderID.OpenID
+		}
+		if !isAllowedSender(senderID, allowed) {
+			c.JSON(http.StatusOK, gin.H{"msg": "sender not in whitelist"})
+			return
+		}
 	}
 
 	// 构建消息对象
@@ -216,6 +258,11 @@ func (s *Server) handleFeishuWebhook(c *gin.Context) {
 	if strings.TrimSpace(textContent) == "" {
 		c.JSON(http.StatusOK, gin.H{"msg": "empty content"})
 		return
+	}
+
+	// 添加「敲键盘」表情回复，让对方知道已收到
+	if s.feishuClient != nil && msgEvent.Message.MessageID != "" {
+		go s.feishuClient.AddReaction(c.Request.Context(), msgEvent.Message.MessageID, "TYPING") //nolint
 	}
 
 	senderName := ""
@@ -233,6 +280,17 @@ func (s *Server) handleFeishuWebhook(c *gin.Context) {
 		Content:    textContent,
 		Timestamp:  time.Now(),
 	}
+
+	// 记录收到的消息
+	_ = store.SaveChatMessage(&model.ChatMessage{
+		Direction: "incoming",
+		ChatID:    msg.ChatID,
+		ChatType:  msg.ChatType,
+		SenderID:  msg.SenderID,
+		MessageID: msg.MessageID,
+		MsgType:   msgEvent.Message.MessageType,
+		Content:   textContent,
+	})
 
 	// 交给 Runner 处理（异步）
 	if s.runner != nil {
@@ -252,6 +310,19 @@ func isMentioned(mentions []*feishu.Mention, botOpenID string) bool {
 	}
 	for _, m := range mentions {
 		if m.ID != nil && m.ID.OpenID == botOpenID {
+			return true
+		}
+	}
+	return false
+}
+
+// isAllowedSender 检查发送者是否在白名单中（逗号分隔的 Open ID 列表）
+func isAllowedSender(senderID, allowedList string) bool {
+	if senderID == "" {
+		return false
+	}
+	for _, id := range strings.Split(allowedList, ",") {
+		if strings.TrimSpace(id) == senderID {
 			return true
 		}
 	}

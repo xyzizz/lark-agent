@@ -142,16 +142,58 @@ func pkcs7Unpad(data []byte) ([]byte, error) {
 // ─── 消息解析 ─────────────────────────────────────────────────
 
 // ParseTextContent 从 MessageContent.Content（JSON 字符串）中提取文本
+// 支持 text 类型 {"text":"..."} 和 post 类型 {"title":"...","content":[[{"tag":"text","text":"..."}]]}
 func ParseTextContent(content string) string {
+	// 先尝试 text 类型
 	var tc TextContent
-	if err := json.Unmarshal([]byte(content), &tc); err != nil {
-		return content
+	if err := json.Unmarshal([]byte(content), &tc); err == nil && tc.Text != "" {
+		return strings.TrimSpace(tc.Text)
 	}
-	// 去掉 @ 机器人的标记（如 @_user_1 ）
-	text := tc.Text
-	// 飞书文本中 @ 用户格式为 @<mention_key>，替换掉
-	// 保留空格，方便后续处理
-	return strings.TrimSpace(text)
+
+	// 再尝试 post 类型（富文本）
+	var post struct {
+		Title   string              `json:"title"`
+		Content [][]json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(content), &post); err == nil && len(post.Content) > 0 {
+		return strings.TrimSpace(extractPostText(post.Title, post.Content))
+	}
+
+	return content
+}
+
+// extractPostText 从 post 格式中提取纯文本
+func extractPostText(title string, paragraphs [][]json.RawMessage) string {
+	var sb strings.Builder
+	if title != "" {
+		sb.WriteString(title)
+		sb.WriteString("\n")
+	}
+	for _, para := range paragraphs {
+		for _, elem := range para {
+			var node struct {
+				Tag  string `json:"tag"`
+				Text string `json:"text"`
+				Href string `json:"href"`
+			}
+			if json.Unmarshal(elem, &node) != nil {
+				continue
+			}
+			switch node.Tag {
+			case "text":
+				sb.WriteString(node.Text)
+			case "a":
+				sb.WriteString(node.Text)
+				if node.Href != "" {
+					sb.WriteString("(" + node.Href + ")")
+				}
+			case "at":
+				// @mention，跳过（后续由 cleanMentionText 处理）
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // ReadBody 读取 HTTP 请求体（复用安全）

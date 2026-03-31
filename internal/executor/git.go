@@ -120,7 +120,7 @@ func (g *GitLabMRCreator) CreateMR(ctx context.Context, req *model.MRRequest) (*
 	// POST /api/v4/projects/:id/merge_requests
 	// 此处返回占位结果，后续按需实现
 	return &model.MRResult{
-		URL:   fmt.Sprintf("%s/-/merge_requests/new?merge_request[source_branch]=%s", req.RemoteURL, req.Branch),
+		URL:   fmt.Sprintf("[gitlab] branch: %s -> %s", req.Branch, req.BaseBranch),
 		Error: "",
 	}, nil
 }
@@ -134,7 +134,7 @@ func (g *GithubPRCreator) CreateMR(ctx context.Context, req *model.MRRequest) (*
 	// TODO: 调用 GitHub API 创建 PR
 	// POST /repos/{owner}/{repo}/pulls
 	return &model.MRResult{
-		URL: fmt.Sprintf("%s/compare/%s...%s?expand=1", req.RemoteURL, req.BaseBranch, req.Branch),
+		URL: fmt.Sprintf("[github] branch: %s -> %s", req.Branch, req.BaseBranch),
 	}, nil
 }
 

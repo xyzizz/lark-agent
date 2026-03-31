@@ -5,6 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>工具配置 - 飞书智能助手</title>
 <link rel="stylesheet" href="/static/style.css">
+<style>
+.tool-section { margin-bottom: 8px; }
+.tool-section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border); margin-bottom: 12px;
+}
+.tool-section-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.tool-section-count {
+  font-size: 12px; font-weight: 400; color: var(--gray-3);
+  background: var(--gray-1); border-radius: 10px; padding: 1px 8px;
+}
+.tool-empty { text-align: center; color: var(--gray-3); padding: 24px; font-size: 13px; }
+/* 动态表单字段 */
+.field-group { display: none; }
+.field-group.active { display: block; }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -17,35 +33,39 @@
       <a class="nav-item active" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
       <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
       <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+      <a class="nav-item" href="/messages"><span class="icon">💬</span><span class="label">对话记录</span></a>
+          <a class="nav-item" href="/terminal"><span class="icon">🖥️</span><span class="label">终端</span></a>
     </nav>
   </aside>
 
   <div class="main-content">
     <div class="topbar"><span class="topbar-title">工具 / MCP 配置</span></div>
     <div class="page-content">
-      <div class="card">
-        <div class="card-title">
-          工具列表
-          <button class="btn btn-primary btn-sm" onclick="openCreate()">+ 新增工具</button>
-        </div>
-        <div class="alert alert-info">
-          支持三种工具类型：<strong>mcp</strong>（MCP 服务，填入服务地址或 "mock"）、<strong>shell</strong>（Shell 脚本）、<strong>skill</strong>（飞书 Skill 名称）
+
+      <!-- MCP 服务 -->
+      <div class="card tool-section">
+        <div class="tool-section-header">
+          <div class="tool-section-title">🔌 MCP 服务 <span class="tool-section-count" id="mcp-count">0</span></div>
+          <button class="btn btn-primary btn-sm" onclick="openCreate('mcp')">+ 新增</button>
         </div>
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr>
-                <th>名称</th>
-                <th>类型</th>
-                <th>描述</th>
-                <th>命令/地址</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="tools-tbody">
-              <tr><td colspan="6" style="text-align:center;color:#999;padding:24px">加载中...</td></tr>
-            </tbody>
+            <thead><tr><th>名称</th><th>描述</th><th>服务地址</th><th>参数模板</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="mcp-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Skill -->
+      <div class="card tool-section">
+        <div class="tool-section-header">
+          <div class="tool-section-title">⚡ Skill <span class="tool-section-count" id="skill-count">0</span></div>
+          <button class="btn btn-primary btn-sm" onclick="openCreate('skill')">+ 新增</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>名称</th><th>描述</th><th>Skill 标识</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="skill-tbody"></tbody>
           </table>
         </div>
       </div>
@@ -59,13 +79,7 @@
         <div class="table-wrap">
           <table>
             <thead>
-              <tr>
-                <th>名称</th>
-                <th>类型</th>
-                <th>内容预览</th>
-                <th>状态</th>
-                <th>操作</th>
-              </tr>
+              <tr><th>名称</th><th>类型</th><th>内容预览</th><th>状态</th><th>操作</th></tr>
             </thead>
             <tbody id="prompts-tbody">
               <tr><td colspan="5" style="text-align:center;color:#999;padding:24px">加载中...</td></tr>
@@ -88,29 +102,41 @@
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">工具名称 <span style="color:red">*</span></label>
-          <input class="form-input" name="name" placeholder="mysql-mcp">
+          <input class="form-input" name="name" placeholder="工具唯一标识">
         </div>
         <div class="form-group">
           <label class="form-label">类型</label>
-          <select class="form-select" name="tool_type">
+          <select class="form-select" name="tool_type" onchange="onTypeChange(this.value)">
             <option value="mcp">MCP 服务</option>
-            <option value="shell">Shell 命令</option>
             <option value="skill">Skill</option>
           </select>
         </div>
       </div>
       <div class="form-group">
         <label class="form-label">描述</label>
-        <input class="form-input" name="description" placeholder="工具用途描述">
+        <input class="form-input" name="description" placeholder="工具用途说明">
       </div>
-      <div class="form-group">
-        <label class="form-label">命令/地址（MCP 填 HTTP 地址或 "mock"，shell 填命令）</label>
-        <input class="form-input" name="command" placeholder="mock 或 http://localhost:3000/mcp">
+
+      <!-- MCP 字段 -->
+      <div class="field-group" id="fields-mcp">
+        <div class="form-group">
+          <label class="form-label">服务地址</label>
+          <input class="form-input" name="mcp_command" placeholder="http://localhost:3000/mcp 或 mock">
+        </div>
+        <div class="form-group">
+          <label class="form-label">参数模板（JSON）</label>
+          <textarea class="form-textarea" name="mcp_args" rows="3" style="font-family:monospace">{}</textarea>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">参数模板（JSON 格式）</label>
-        <textarea class="form-textarea" name="args_template" rows="3">{}</textarea>
+
+      <!-- Skill 字段 -->
+      <div class="field-group" id="fields-skill">
+        <div class="form-group">
+          <label class="form-label">Skill 标识</label>
+          <input class="form-input" name="skill_command" placeholder="deploy-prod">
+        </div>
       </div>
+
       <div class="form-group">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <label class="toggle">
@@ -146,8 +172,6 @@
           <select class="form-select" name="template_type">
             <option value="system">系统提示词</option>
             <option value="intent">意图识别</option>
-            <option value="issue">问题排查</option>
-            <option value="requirement">需求编写</option>
           </select>
         </div>
       </div>
@@ -176,63 +200,134 @@
 <script>
 let editingToolId = null, editingPromptId = null;
 
+// ── 类型切换 ─────────────────────────────────────
+function onTypeChange(type) {
+  document.querySelectorAll('.field-group').forEach(el => el.classList.remove('active'));
+  const target = document.getElementById('fields-' + type);
+  if (target) target.classList.add('active');
+}
+
+// ── 工具列表 ─────────────────────────────────────
 async function loadTools() {
   const res = await API.get('/api/tools');
   if (res.code !== 0) return;
-  const rows = res.data || [];
-  const tbody = document.getElementById('tools-tbody');
-  if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:24px">暂无工具，点击"新增工具"添加</td></tr>';
-    return;
-  }
-  tbody.innerHTML = rows.map(t => `
-    <tr>
-      <td><strong>${t.name}</strong></td>
-      <td><span class="badge badge-default">${t.tool_type}</span></td>
-      <td>${t.description || '-'}</td>
-      <td style="font-family:monospace;font-size:12px">${t.command || '-'}</td>
-      <td>${t.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-default">禁用</span>'}</td>
-      <td>
-        <button class="btn btn-sm btn-default" onclick='editTool(${JSON.stringify(t)})'>编辑</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteTool('${t.id}','${t.name}')">删除</button>
-      </td>
-    </tr>
-  `).join('');
+  const all = res.data || [];
+
+  const groups = { mcp: [], skill: [] };
+  all.forEach(t => {
+    const g = groups[t.tool_type];
+    if (g) g.push(t); else groups.mcp.push(t);
+  });
+
+  renderToolGroup('mcp', groups.mcp);
+  renderToolGroup('skill', groups.skill);
 }
 
-function openCreate() {
+function renderToolGroup(type, tools) {
+  document.getElementById(type + '-count').textContent = tools.length;
+  const tbody = document.getElementById(type + '-tbody');
+
+  if (!tools.length) {
+    const cols = type === 'mcp' ? 6 : 5;
+    tbody.innerHTML = `<tr><td colspan="${cols}" class="tool-empty">暂无${typeLabel(type)}，点击上方按钮添加</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = tools.map(t => {
+    const statusBadge = t.enabled
+      ? '<span class="badge badge-success">启用</span>'
+      : '<span class="badge badge-default">禁用</span>';
+    const cmd = escHtml(t.command || '-');
+
+    let extraCells = '';
+    if (type === 'mcp') {
+      const args = t.args_template && t.args_template !== '{}' ? escHtml(truncate(t.args_template, 40)) : '-';
+      extraCells = `<td style="font-family:monospace;font-size:12px">${cmd}</td><td style="font-family:monospace;font-size:12px">${args}</td>`;
+    } else {
+      extraCells = `<td style="font-family:monospace;font-size:12px">${cmd}</td>`;
+    }
+
+    return `<tr>
+      <td><strong>${escHtml(t.name)}</strong></td>
+      <td>${escHtml(t.description || '-')}</td>
+      ${extraCells}
+      <td>${statusBadge}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-default" onclick='editTool(${JSON.stringify(t).replace(/'/g,"&#39;")})'>编辑</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteTool('${t.id}','${escHtml(t.name)}')">删除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function typeLabel(type) {
+  return { mcp: 'MCP 服务', skill: 'Skill' }[type] || type;
+}
+
+function truncate(s, n) {
+  return s.length > n ? s.substring(0, n) + '...' : s;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+// ── 新增 / 编辑 ─────────────────────────────────
+function openCreate(type) {
   editingToolId = null;
-  document.getElementById('tool-modal-title').textContent = '新增工具';
-  document.getElementById('tool-form').reset();
-  document.querySelector('#tool-form [name="enabled"]').checked = true;
-  document.querySelector('#tool-form [name="args_template"]').value = '{}';
+  document.getElementById('tool-modal-title').textContent = '新增' + typeLabel(type);
+  const form = document.getElementById('tool-form');
+  form.reset();
+  form.querySelector('[name="tool_type"]').value = type;
+  form.querySelector('[name="enabled"]').checked = true;
+  form.querySelector('[name="mcp_args"]').value = '{}';
+  onTypeChange(type);
   Modal.open('tool-modal');
 }
 
 function editTool(t) {
   editingToolId = t.id;
-  document.getElementById('tool-modal-title').textContent = '编辑工具 - ' + t.name;
+  document.getElementById('tool-modal-title').textContent = '编辑 - ' + t.name;
   const form = document.getElementById('tool-form');
   form.querySelector('[name="name"]').value = t.name;
   form.querySelector('[name="tool_type"]').value = t.tool_type;
   form.querySelector('[name="description"]').value = t.description || '';
-  form.querySelector('[name="command"]').value = t.command || '';
-  form.querySelector('[name="args_template"]').value = t.args_template || '{}';
   form.querySelector('[name="enabled"]').checked = t.enabled;
+
+  // 填入对应类型的字段
+  form.querySelector('[name="mcp_command"]').value = t.tool_type === 'mcp' ? (t.command || '') : '';
+  form.querySelector('[name="mcp_args"]').value = t.tool_type === 'mcp' ? (t.args_template || '{}') : '{}';
+  form.querySelector('[name="skill_command"]').value = t.tool_type === 'skill' ? (t.command || '') : '';
+
+  onTypeChange(t.tool_type);
   Modal.open('tool-modal');
 }
 
 async function saveTool() {
   const form = document.getElementById('tool-form');
+  const type = form.querySelector('[name="tool_type"]').value;
+
+  // 根据类型读取对应字段
+  let command = '', argsTemplate = '{}';
+  if (type === 'mcp') {
+    command = form.querySelector('[name="mcp_command"]').value.trim();
+    argsTemplate = form.querySelector('[name="mcp_args"]').value || '{}';
+  } else {
+    command = form.querySelector('[name="skill_command"]').value.trim();
+  }
+
   const data = {
     name: form.querySelector('[name="name"]').value.trim(),
-    tool_type: form.querySelector('[name="tool_type"]').value,
+    tool_type: type,
     description: form.querySelector('[name="description"]').value,
-    command: form.querySelector('[name="command"]').value.trim(),
-    args_template: form.querySelector('[name="args_template"]').value || '{}',
+    command: command,
+    args_template: argsTemplate,
     enabled: form.querySelector('[name="enabled"]').checked,
   };
   if (!data.name) { Toast.info('请填写工具名称'); return; }
+
   const res = editingToolId
     ? await API.put(`/api/tools/${editingToolId}`, data)
     : await API.post('/api/tools', data);
@@ -257,16 +352,16 @@ async function loadPrompts() {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:24px">暂无模板</td></tr>';
     return;
   }
-  const typeLabel = { system:'系统', intent:'意图识别', issue:'问题排查', requirement:'需求编写' };
+  const tl = { system:'系统', intent:'意图识别' };
   tbody.innerHTML = rows.map(p => `
     <tr>
-      <td><strong>${p.name}</strong></td>
-      <td><span class="badge badge-default">${typeLabel[p.template_type] || p.template_type}</span></td>
-      <td class="td-wrap" style="max-width:400px">${(p.content || '').substring(0, 80)}...</td>
+      <td><strong>${escHtml(p.name)}</strong></td>
+      <td><span class="badge badge-default">${tl[p.template_type] || p.template_type}</span></td>
+      <td class="td-wrap" style="max-width:400px">${escHtml((p.content || '').substring(0, 80))}...</td>
       <td>${p.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-default">禁用</span>'}</td>
-      <td>
+      <td style="white-space:nowrap">
         <button class="btn btn-sm btn-default" onclick='editPrompt(${JSON.stringify(p).replace(/"/g,"&quot;")})'>编辑</button>
-        <button class="btn btn-sm btn-danger" onclick="deletePrompt('${p.id}','${p.name}')">删除</button>
+        <button class="btn btn-sm btn-danger" onclick="deletePrompt('${p.id}','${escHtml(p.name)}')">删除</button>
       </td>
     </tr>
   `).join('');

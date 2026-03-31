@@ -2,8 +2,10 @@
 package main
 
 import (
+	"context"
 	"feishu-agent/internal/config"
 	"feishu-agent/internal/executor"
+	"feishu-agent/internal/feishu"
 	"feishu-agent/internal/httpserver"
 	"feishu-agent/internal/store"
 	"flag"
@@ -43,7 +45,10 @@ func main() {
 	appID := firstNonEmpty(settings["feishu_app_id"], cfg.Feishu.AppID)
 	appSecret := firstNonEmpty(settings["feishu_app_secret"], cfg.Feishu.AppSecret)
 
-	// 4. 初始化 MCP 客户端
+	// 4. 从 tools/ 目录加载工具文件到 DB，然后初始化 MCP 客户端
+	if err = store.SyncToolsFromFiles(); err != nil {
+		log.Printf("[main] sync tools from files warning: %v", err)
+	}
 	if err = executor.InitMCPClients(); err != nil {
 		log.Printf("[main] init mcp clients warning: %v", err)
 	}
@@ -52,10 +57,23 @@ func main() {
 	srv := httpserver.New(cfg.Server.Debug)
 	srv.InitFeishu(appID, appSecret)
 
+	// 5.1 如果配置了 WebSocket 模式，启动长连接客户端
+	eventMode := firstNonEmpty(settings["feishu_event_mode"], cfg.Feishu.EventMode, "webhook")
+	if eventMode == "websocket" && appID != "" && appSecret != "" {
+		wsClient := feishu.NewWSClient(appID, appSecret, srv.GetRunner(), srv.GetFeishuClient())
+		go func() {
+			if err := wsClient.Start(context.Background()); err != nil {
+				log.Printf("[main] websocket client error: %v", err)
+			}
+		}()
+		log.Printf("[main] 飞书事件模式: WebSocket 长连接")
+	} else {
+		log.Printf("[main] 飞书事件模式: Webhook (POST /webhook/feishu)")
+	}
+
 	// 6. 启动服务
 	addr := httpserver.Addr(cfg.Server.Host, cfg.Server.Port)
 	log.Printf("[main] server listening on http://%s", addr)
-	log.Printf("[main] 飞书 Webhook URL: http://<your-host>:%d/webhook/feishu", cfg.Server.Port)
 	log.Printf("[main] 管理后台: http://localhost:%d", cfg.Server.Port)
 
 	// 优雅退出
@@ -101,6 +119,9 @@ func applyDBSettings(s map[string]string) {
 		}
 		if v := s["feishu_bot_webhook"]; v != "" {
 			c.Feishu.BotWebhook = v
+		}
+		if v := s["feishu_event_mode"]; v != "" {
+			c.Feishu.EventMode = v
 		}
 		// LLM
 		if v := s["llm_api_key"]; v != "" {

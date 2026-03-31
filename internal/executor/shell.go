@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -23,7 +25,7 @@ func RunShell(ctx context.Context, dir, command string, args ...string) (*ShellR
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, command, args...)
 	if dir != "" {
-		cmd.Dir = dir
+		cmd.Dir = expandHome(dir)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -66,6 +68,21 @@ func RunCustomCheck(ctx context.Context, repoPath, command string) (*ShellResult
 		return RunShell(ctx, repoPath, parts[0])
 	}
 	return RunShell(ctx, repoPath, parts[0], parts[1:]...)
+}
+
+// expandHome 展开路径中的 ~ 为用户主目录
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	return path
 }
 
 func truncateStr(s string, n int) string {

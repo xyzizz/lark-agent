@@ -17,6 +17,8 @@
       <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
       <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
       <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+      <a class="nav-item" href="/messages"><span class="icon">💬</span><span class="label">对话记录</span></a>
+          <a class="nav-item" href="/terminal"><span class="icon">🖥️</span><span class="label">终端</span></a>
     </nav>
   </aside>
 
@@ -28,9 +30,20 @@
       <div class="card">
         <div class="card-title">飞书应用配置</div>
         <div class="alert alert-info">
-          配置说明：在 <strong>飞书开放平台</strong> 创建企业自建应用后，填入以下信息。Webhook 地址为：<code>http://你的服务地址/webhook/feishu</code>
+          配置说明：在 <strong>飞书开放平台</strong> 创建企业自建应用后，填入以下信息。<br>
+          事件接收模式：<strong>WebSocket 长连接</strong>无需公网地址，适合本机部署；<strong>Webhook</strong> 需配置公网回调地址。切换模式后需重启服务生效。
         </div>
         <form id="feishu-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">事件接收模式</label>
+              <select class="form-select" name="feishu_event_mode">
+                <option value="webhook">Webhook（需公网地址）</option>
+                <option value="websocket">WebSocket 长连接（无需公网）</option>
+              </select>
+            </div>
+            <div class="form-group"></div>
+          </div>
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">App ID <span style="color:red">*</span></label>
@@ -61,8 +74,24 @@
               <input class="form-input" name="feishu_bot_webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/...">
             </div>
           </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">允许的发送者（白名单）</label>
+              <input class="form-input" name="feishu_allowed_senders" placeholder="ou_xxx,ou_yyy — 逗号分隔，空则允许所有人">
+            </div>
+            <div class="form-group">
+              <label class="form-label">允许群聊触发</label>
+              <div style="display:flex;align-items:center;gap:8px;height:38px">
+                <label class="toggle">
+                  <input type="checkbox" name="feishu_allow_group">
+                  <span class="toggle-slider"></span>
+                </label>
+                <span style="font-size:13px;color:var(--gray-3)">关闭时仅私聊可触发（更安全）</span>
+              </div>
+            </div>
+          </div>
           <div style="display:flex;gap:8px;margin-top:8px">
-            <button type="button" class="btn btn-primary" onclick="saveSettings('feishu-form', ['feishu_app_id','feishu_app_secret','feishu_verification_token','feishu_encrypt_key','feishu_bot_open_id','feishu_bot_webhook'])">💾 保存配置</button>
+            <button type="button" class="btn btn-primary" onclick="saveSettings('feishu-form', ['feishu_event_mode','feishu_app_id','feishu_app_secret','feishu_verification_token','feishu_encrypt_key','feishu_bot_open_id','feishu_bot_webhook','feishu_allowed_senders','feishu_allow_group'])">💾 保存配置</button>
             <button type="button" class="btn btn-default" onclick="testFeishu()">🔌 测试连接</button>
           </div>
         </form>
@@ -115,10 +144,14 @@ async function loadSettings() {
   const s = res.data;
 
   // 飞书配置
-  ['feishu_app_id','feishu_verification_token','feishu_bot_open_id','feishu_bot_webhook'].forEach(k => {
+  ['feishu_app_id','feishu_verification_token','feishu_bot_open_id','feishu_bot_webhook','feishu_allowed_senders'].forEach(k => {
     const el = document.querySelector(`[name="${k}"]`);
     if (el) el.value = s[k] || '';
   });
+  if (s.feishu_event_mode) {
+    document.querySelector('[name="feishu_event_mode"]').value = s.feishu_event_mode;
+  }
+  document.querySelector('[name="feishu_allow_group"]').checked = s.feishu_allow_group === 'true';
   // 密码字段不回显明文，只显示占位符
   if (s.feishu_app_secret) {
     document.querySelector('[name="feishu_app_secret"]').placeholder = '已配置（输入新值以覆盖）';
@@ -142,12 +175,16 @@ async function loadSettings() {
   }
 }
 
+// 允许保存空值的字段（清空 = 取消限制）
+const ALLOW_EMPTY_KEYS = new Set(['feishu_allowed_senders']);
+
 async function saveSettings(formId, keys) {
   const allData = formData(formId);
   const data = {};
   keys.forEach(k => {
-    if (allData[k] !== undefined && allData[k] !== '') {
-      data[k] = allData[k];
+    if (allData[k] !== undefined && (allData[k] !== '' || ALLOW_EMPTY_KEYS.has(k))) {
+      // checkbox 值转为字符串 "true"/"false"
+      data[k] = typeof allData[k] === 'boolean' ? String(allData[k]) : allData[k];
     }
   });
   const res = await API.post('/api/settings', data);
@@ -183,9 +220,17 @@ async function testLLM() {
 
 async function testFeishu() {
   const btn = event.target;
+  const form = document.getElementById('feishu-form');
+  const appId = form.querySelector('[name="feishu_app_id"]').value.trim();
+  const appSecret = form.querySelector('[name="feishu_app_secret"]').value.trim();
+
+  if (!appId) {
+    Toast.info('请先填写 App ID');
+    return;
+  }
   setLoading(btn, true);
   try {
-    const res = await API.post('/api/test/feishu', {});
+    const res = await API.post('/api/test/feishu', { app_id: appId, app_secret: appSecret });
     if (res.code === 0) Toast.success('飞书连接成功 ✅');
     else Toast.error('连接失败：' + res.message);
   } finally {

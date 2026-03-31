@@ -5,6 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>项目路由 - 飞书智能助手</title>
 <link rel="stylesheet" href="/static/style.css">
+<style>
+.repo-row {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 8px;
+}
+.repo-row input { flex: 1; }
+.repo-row .repo-desc { flex: 0 0 180px; }
+.repo-row .btn-remove {
+  flex-shrink: 0; width: 28px; height: 28px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--gray-2); border-radius: 4px; background: #fff;
+  color: var(--error); cursor: pointer; font-size: 16px;
+}
+.repo-row .btn-remove:hover { background: #fff2f0; }
+</style>
 </head>
 <body>
 <div class="layout">
@@ -17,6 +31,8 @@
       <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
       <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
       <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+      <a class="nav-item" href="/messages"><span class="icon">💬</span><span class="label">对话记录</span></a>
+          <a class="nav-item" href="/terminal"><span class="icon">🖥️</span><span class="label">终端</span></a>
     </nav>
   </aside>
 
@@ -78,12 +94,11 @@
         <input class="form-input" name="keywords_str" placeholder="订单, order, 支付, pay">
       </div>
       <div class="form-group">
-        <label class="form-label">本地仓库路径 <span style="color:red">*</span></label>
-        <input class="form-input" name="repo_path" placeholder="/Users/me/projects/order-service">
-      </div>
-      <div class="form-group">
-        <label class="form-label">远端仓库 URL（用于创建 MR）</label>
-        <input class="form-input" name="remote_url" placeholder="https://gitlab.com/org/order-service">
+        <label class="form-label" style="display:flex;align-items:center;justify-content:space-between">
+          <span>本地仓库</span>
+          <button type="button" class="btn btn-sm btn-default" onclick="addRepoRow()">+ 添加仓库</button>
+        </label>
+        <div id="repo-list"></div>
       </div>
       <div class="form-group">
         <label class="form-label">文档来源（飞书文档 URL 或 token）</label>
@@ -120,6 +135,39 @@
 <script>
 let editingId = null;
 
+function addRepoRow(path, desc) {
+  const list = document.getElementById('repo-list');
+  const row = document.createElement('div');
+  row.className = 'repo-row';
+  row.innerHTML = `
+    <input class="form-input repo-path" placeholder="/Users/me/projects/repo" value="${path || ''}">
+    <input class="form-input repo-desc" placeholder="描述（可选）" value="${desc || ''}">
+    <button type="button" class="btn-remove" onclick="this.parentElement.remove()" title="删除">×</button>
+  `;
+  list.appendChild(row);
+}
+
+function getRepos() {
+  const rows = document.querySelectorAll('#repo-list .repo-row');
+  const repos = [];
+  rows.forEach(row => {
+    const path = row.querySelector('.repo-path').value.trim();
+    if (path) {
+      repos.push({ path, description: row.querySelector('.repo-desc').value.trim() });
+    }
+  });
+  return repos;
+}
+
+function setRepos(repos) {
+  document.getElementById('repo-list').innerHTML = '';
+  if (!repos || repos.length === 0) {
+    addRepoRow();
+    return;
+  }
+  repos.forEach(r => addRepoRow(r.path, r.description));
+}
+
 async function loadRoutes() {
   const res = await API.get('/api/routes');
   if (res.code !== 0) { Toast.error(res.message); return; }
@@ -133,7 +181,7 @@ async function loadRoutes() {
     <tr>
       <td><strong>${r.name}</strong></td>
       <td class="td-wrap">${(r.keywords || []).map(k => `<span style="background:#f0f0f0;padding:2px 6px;border-radius:4px;margin:2px;display:inline-block;font-size:12px">${k}</span>`).join('')}</td>
-      <td class="td-wrap" style="font-family:monospace;font-size:12px">${r.repo_path || '-'}</td>
+      <td class="td-wrap" style="font-family:monospace;font-size:12px">${(r.repos || []).map(repo => repo.description ? repo.path + ' <span style="color:#999">(' + repo.description + ')</span>' : repo.path).join('<br>') || '-'}</td>
       <td>${r.priority}</td>
       <td>${(r.mcp_list || []).join(', ') || '-'}</td>
       <td>${r.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-default">禁用</span>'}</td>
@@ -150,6 +198,7 @@ function openCreateModal() {
   document.getElementById('modal-title').textContent = '新建路由';
   document.getElementById('route-form').reset();
   document.querySelector('[name="enabled"]').checked = true;
+  setRepos([]);
   Modal.open('route-modal');
 }
 
@@ -160,8 +209,7 @@ function editRoute(r) {
   form.querySelector('[name="name"]').value = r.name;
   form.querySelector('[name="priority"]').value = r.priority;
   form.querySelector('[name="keywords_str"]').value = joinTags(r.keywords);
-  form.querySelector('[name="repo_path"]').value = r.repo_path;
-  form.querySelector('[name="remote_url"]').value = r.remote_url || '';
+  setRepos(r.repos || []);
   form.querySelector('[name="doc_source"]').value = r.doc_source || '';
   form.querySelector('[name="mcp_list_str"]').value = joinTags(r.mcp_list);
   form.querySelector('[name="skill_list_str"]').value = joinTags(r.skill_list);
@@ -175,15 +223,13 @@ async function saveRoute() {
     name: form.querySelector('[name="name"]').value.trim(),
     priority: parseInt(form.querySelector('[name="priority"]').value) || 0,
     keywords: splitTags(form.querySelector('[name="keywords_str"]').value),
-    repo_path: form.querySelector('[name="repo_path"]').value.trim(),
-    remote_url: form.querySelector('[name="remote_url"]').value.trim(),
+    repos: getRepos(),
     doc_source: form.querySelector('[name="doc_source"]').value.trim(),
     mcp_list: splitTags(form.querySelector('[name="mcp_list_str"]').value),
     skill_list: splitTags(form.querySelector('[name="skill_list_str"]').value),
     enabled: form.querySelector('[name="enabled"]').checked,
   };
   if (!data.name) { Toast.info('请填写项目名'); return; }
-  if (!data.repo_path) { Toast.info('请填写仓库路径'); return; }
 
   let res;
   if (editingId) {

@@ -30,6 +30,7 @@ type FeishuConfig struct {
 	VerificationToken string `yaml:"verification_token"`
 	EncryptKey        string `yaml:"encrypt_key"`
 	BotWebhook        string `yaml:"bot_webhook"`
+	EventMode         string `yaml:"event_mode"` // webhook | websocket
 }
 
 type LLMConfig struct {

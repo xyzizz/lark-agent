@@ -13,6 +13,8 @@ feishu:
   encrypt_key: ""
   # 机器人 webhook（可选，用于主动推送）
   bot_webhook: ""
+  # 事件接收模式：webhook（需公网地址）| websocket（长连接，无需公网）
+  event_mode: "webhook"
 
 llm:
   # Claude API 配置

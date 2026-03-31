@@ -17,6 +17,8 @@
       <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
       <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
       <a class="nav-item active" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+      <a class="nav-item" href="/messages"><span class="icon">💬</span><span class="label">对话记录</span></a>
+          <a class="nav-item" href="/terminal"><span class="icon">🖥️</span><span class="label">终端</span></a>
     </nav>
   </aside>
 
@@ -57,7 +59,7 @@
   <div class="modal" style="width:760px">
     <div class="modal-header">
       <span class="modal-title">触发详情</span>
-      <span class="modal-close" onclick="Modal.close('detail-modal')">✕</span>
+      <span class="modal-close" onclick="stopLogPolling();Modal.close('detail-modal')">✕</span>
     </div>
     <div id="detail-content" style="max-height:70vh;overflow-y:auto"></div>
   </div>
@@ -67,6 +69,53 @@
 <script>
 let currentPage = 1;
 const pageSize = 20;
+let allowedSenders = new Set(); // 白名单缓存
+let userNames = {};             // open_id → 用户名缓存
+
+async function loadWhitelist() {
+  const res = await API.get('/api/settings');
+  if (res.code !== 0) return;
+  const raw = res.data.feishu_allowed_senders || '';
+  allowedSenders = new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+}
+
+async function resolveUserNames(ids) {
+  const toResolve = ids.filter(id => id && id !== 'manual' && !userNames[id]);
+  if (!toResolve.length) return;
+  const res = await API.get('/api/users/resolve?ids=' + encodeURIComponent(toResolve.join(',')));
+  if (res.code === 0 && res.data) {
+    Object.assign(userNames, res.data);
+  }
+}
+
+function displayName(id) {
+  if (!id || id === 'manual') return '手动';
+  return userNames[id] || id;
+}
+
+function senderCell(t) {
+  const id = t.sender_id || '';
+  if (!id || id === 'manual') return '手动';
+  const name = displayName(id);
+  if (allowedSenders.has(id)) {
+    return `${escHtml(name)} <span class="badge badge-success" style="margin-left:4px">白名单</span>`;
+  }
+  return `${escHtml(name)} <button class="btn btn-sm btn-default" style="margin-left:4px;padding:2px 6px;font-size:11px" onclick="addToWhitelist('${escHtml(id)}')">+ 加白</button>`;
+}
+
+async function addToWhitelist(senderID) {
+  if (allowedSenders.has(senderID)) { Toast.info('已在白名单中'); return; }
+  allowedSenders.add(senderID);
+  const newValue = [...allowedSenders].join(',');
+  const res = await API.post('/api/settings', { feishu_allowed_senders: newValue });
+  if (res.code === 0) {
+    Toast.success('已加入白名单');
+    loadTriggers(); // 刷新列表更新标签
+  } else {
+    allowedSenders.delete(senderID);
+    Toast.error('加白失败：' + res.message);
+  }
+}
 
 async function loadTriggers(page) {
   if (page) currentPage = page;
@@ -82,16 +131,23 @@ async function loadTriggers(page) {
     return;
   }
 
+  // 批量解析用户名
+  const senderIds = [...new Set(rows.map(t => t.sender_id).filter(Boolean))];
+  await resolveUserNames(senderIds);
+
   tbody.innerHTML = rows.map(t => `
     <tr id="tr-${t.id}">
       <td style="white-space:nowrap">${fmtTime(t.created_at)}</td>
-      <td>${t.sender_name || t.sender_id || '手动'}</td>
+      <td style="white-space:nowrap">${senderCell(t)}</td>
       <td class="td-wrap">${(t.raw_message || '').substring(0, 60)}${(t.raw_message||'').length > 60 ? '...' : ''}</td>
       <td><span class="badge badge-default">${intentLabel(t.intent) || '-'}</span></td>
       <td>${t.confidence ? (t.confidence * 100).toFixed(0) + '%' : '-'}</td>
       <td>${t.matched_project || '-'}</td>
       <td>${statusBadge(t.status)}</td>
-      <td><button class="btn btn-sm btn-default" onclick="showDetail('${t.id}')">详情</button></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm btn-default" onclick="showDetail('${t.id}')">详情</button>
+        ${(t.status === 'pending' || t.status === 'running') ? `<button class="btn btn-sm btn-danger" onclick="cancelTrigger('${t.id}')">取消</button>` : ''}
+      </td>
     </tr>
   `).join('');
 
@@ -102,6 +158,20 @@ async function showDetail(id) {
   const res = await API.get(`/api/triggers/${id}`);
   if (res.code !== 0) { Toast.error(res.message); return; }
   const t = res.data;
+
+  // 查找对应项目的仓库路径
+  let terminalDir = '';
+  if (t.matched_project) {
+    try {
+      const routesRes = await API.get('/api/routes');
+      if (routesRes.code === 0) {
+        const route = (routesRes.data || []).find(r => r.name === t.matched_project);
+        if (route && route.repos && route.repos.length > 0) {
+          terminalDir = route.repos[0].path;
+        }
+      }
+    } catch(e) { /* ignore */ }
+  }
 
   const typeIcon = { info:'ℹ️', llm:'🧠', tool_call:'🔧', shell:'💻', git:'📦', feishu:'💬' };
   const stepsHTML = (t.steps || []).map(s => `
@@ -119,12 +189,28 @@ async function showDetail(id) {
     </div>
   `).join('');
 
+  const isRunning = t.status === 'pending' || t.status === 'running';
+  const logSection = `
+    <div style="margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <strong>Claude Code 实时日志：</strong>
+          ${isRunning ? '<span class="badge badge-running" style="margin-left:8px">实时更新中...</span>' : ''}
+        </div>
+        ${isRunning ? `<button class="btn btn-sm btn-danger" onclick="cancelTrigger('${t.id}')">取消执行</button>` : ''}
+      </div>
+      <pre id="live-log" style="margin-top:8px;max-height:300px;overflow-y:auto;font-size:12px;min-height:60px">${isRunning ? '等待输出...' : '（执行已结束）'}</pre>
+    </div>`;
+
   document.getElementById('detail-content').innerHTML = `
     <div style="margin-bottom:16px">
-      <div class="form-row">
-        <div><strong>状态：</strong>${statusBadge(t.status)}</div>
-        <div><strong>意图：</strong>${intentLabel(t.intent)}</div>
-        <div><strong>置信度：</strong>${t.confidence ? (t.confidence*100).toFixed(0)+'%' : '-'}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div class="form-row" style="flex:1">
+          <div><strong>状态：</strong>${statusBadge(t.status)}</div>
+          <div><strong>意图：</strong>${intentLabel(t.intent)}</div>
+          <div><strong>置信度：</strong>${t.confidence ? (t.confidence*100).toFixed(0)+'%' : '-'}</div>
+        </div>
+        <a class="btn btn-sm btn-default" href="/terminal?dir=${encodeURIComponent(terminalDir)}&autostart=1" target="_blank">🖥️ 打开终端</a>
       </div>
       <div style="margin-top:12px"><strong>原始消息：</strong>
         <div style="background:#f5f5f5;padding:10px;border-radius:4px;margin-top:4px">${escHtml(t.raw_message)}</div>
@@ -140,13 +226,73 @@ async function showDetail(id) {
       <strong>执行步骤（${(t.steps||[]).length} 步）：</strong>
       <div class="step-list" style="margin-top:10px">${stepsHTML || '<div style="color:#999">无步骤记录</div>'}</div>
     </div>
+    ${logSection}
   `;
   Modal.open('detail-modal');
+
+  // 启动日志轮询
+  startLogPolling(id, isRunning);
 }
 
 function toggleStep(id) {
   const el = document.getElementById('step-' + id);
   if (el) el.classList.toggle('show');
+}
+
+async function cancelTrigger(id) {
+  if (!confirm('确认取消该任务？Claude Code 进程将被终止。')) return;
+  const res = await API.post(`/api/triggers/${id}/cancel`, {});
+  if (res.code === 0) {
+    Toast.success(res.message);
+    stopLogPolling();
+    setTimeout(() => { loadTriggers(); }, 500);
+  } else {
+    Toast.error(res.message);
+  }
+}
+
+// ── 实时日志轮询 ─────────────────────────────────
+let logPollTimer = null;
+
+function startLogPolling(triggerID, isRunning) {
+  stopLogPolling();
+  let offset = 0;
+  const logEl = document.getElementById('live-log');
+  if (!logEl) return;
+
+  // 无论是否 running，先加载一次已有日志
+  async function poll() {
+    try {
+      const res = await API.get(`/api/triggers/${triggerID}/logs?offset=${offset}`);
+      if (res.code !== 0) return;
+      const { content, offset: newOffset, done } = res.data;
+      if (content) {
+        if (offset === 0) logEl.textContent = ''; // 清除占位文字
+        logEl.textContent += content;
+        logEl.scrollTop = logEl.scrollHeight;
+        offset = newOffset;
+      }
+      if (done) {
+        stopLogPolling();
+        // 刷新详情以更新状态
+        const badge = document.querySelector('#detail-content .badge-running');
+        if (badge) badge.outerHTML = '<span class="badge badge-success" style="margin-left:8px">已完成</span>';
+        return;
+      }
+    } catch(e) { /* ignore */ }
+  }
+
+  poll(); // 立即执行一次
+  if (isRunning) {
+    logPollTimer = setInterval(poll, 1500);
+  }
+}
+
+function stopLogPolling() {
+  if (logPollTimer) {
+    clearInterval(logPollTimer);
+    logPollTimer = null;
+  }
 }
 
 function escHtml(s) {
@@ -159,7 +305,7 @@ if (location.hash) {
   if (id) setTimeout(() => showDetail(id), 800);
 }
 
-loadTriggers(1);
+loadWhitelist().then(() => loadTriggers(1));
 </script>
 </body>
 </html>

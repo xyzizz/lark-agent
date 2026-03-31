@@ -183,6 +183,31 @@ func (c *Client) GetDocContent(ctx context.Context, docToken string) (string, er
 	return result.Data.Content, nil
 }
 
+// AddReaction 给消息添加表情回复
+func (c *Client) AddReaction(ctx context.Context, messageID, emojiType string) error {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]any{
+		"reaction_type": map[string]string{"emoji_type": emojiType},
+	}
+	body, _ := json.Marshal(payload)
+
+	url := fmt.Sprintf("%s/im/v1/messages/%s/reactions", baseURL, messageID)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpCli.Do(req)
+	if err != nil {
+		return fmt.Errorf("add reaction: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
 // TestConnection 测试飞书连接
 func (c *Client) TestConnection(ctx context.Context) error {
 	_, err := c.getToken(ctx)

@@ -1,158 +1,207 @@
 package executor
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
-	"feishu-agent/internal/intent"
 	"feishu-agent/internal/model"
-	"feishu-agent/internal/store"
 	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
-// ClaudeCodeExecutor 调用 Claude API 执行代码分析与修改任务
+const logsDir = "./logs/claude"
+
+// ─── Job 注册表（跟踪活跃的 Claude Code 进程）─────────────────
+
+// ActiveJob 活跃任务信息
+type ActiveJob struct {
+	TriggerID string             `json:"trigger_id"`
+	Cancel    context.CancelFunc `json:"-"`
+	StartedAt time.Time          `json:"started_at"`
+}
+
+var (
+	jobsMu     sync.Mutex
+	activeJobs = make(map[string]*ActiveJob)
+)
+
+func RegisterJob(triggerID string, cancel context.CancelFunc) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	activeJobs[triggerID] = &ActiveJob{
+		TriggerID: triggerID,
+		Cancel:    cancel,
+		StartedAt: time.Now(),
+	}
+}
+
+func UnregisterJob(triggerID string) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	delete(activeJobs, triggerID)
+}
+
+func CancelJob(triggerID string) bool {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	job, ok := activeJobs[triggerID]
+	if !ok {
+		return false
+	}
+	job.Cancel()
+	delete(activeJobs, triggerID)
+	return true
+}
+
+func ListActiveJobs() []string {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	ids := make([]string, 0, len(activeJobs))
+	for id := range activeJobs {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// GetJob 获取活跃任务（供终端页判断状态）
+func GetJob(triggerID string) *ActiveJob {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	return activeJobs[triggerID]
+}
+
+// ─── Claude Code 执行器 ─────────────────────────────────────────
+
 type ClaudeCodeExecutor struct{}
 
 func NewClaudeCodeExecutor() *ClaudeCodeExecutor {
 	return &ClaudeCodeExecutor{}
 }
 
-// Execute 执行代码任务（分析、修改建议）
-// 注意：实际的文件修改由 Claude Code CLI 执行，这里只做分析和计划生成
+// LogFilePath 返回指定 trigger 的日志文件路径
+func LogFilePath(triggerID string) string {
+	return filepath.Join(logsDir, triggerID+".log")
+}
+
+// Execute 调用 claude -p（分析模式，不修改文件），逐行写入日志文件
 func (e *ClaudeCodeExecutor) Execute(ctx context.Context, req *model.ClaudeExecRequest) (*model.ClaudeExecResult, error) {
-	// 1. 先读取仓库状态
-	repoInfo, err := getRepoInfo(ctx, req.RepoPath)
-	if err != nil {
-		repoInfo = "无法读取仓库信息: " + err.Error()
-	}
-
-	// 2. 构建提示词
-	systemPrompt := req.SystemPrompt
-	if systemPrompt == "" {
-		if sysTpl, _ := store.GetPromptByType("system"); sysTpl != nil {
-			systemPrompt = sysTpl.Content
-		} else {
-			systemPrompt = "你是一个资深工程师，专注于代码分析和修改。输出必须是 JSON 格式。"
-		}
-	}
-
-	userPrompt := buildCodeTaskPrompt(req, repoInfo)
-
-	// 3. 调用 LLM
-	raw, err := intent.CallLLMRaw(ctx, systemPrompt, userPrompt)
-	if err != nil {
-		return &model.ClaudeExecResult{
-			Success: false,
-			Error:   fmt.Sprintf("LLM 调用失败: %v", err),
-		}, err
-	}
-
-	// 4. 解析结果
-	result, err := parseCodeResult(raw)
-	if err != nil {
-		// 解析失败，仍然返回原始输出
+	if req.DryRun {
 		return &model.ClaudeExecResult{
 			Success: true,
-			Plan:    raw,
-			Summary: "LLM 响应解析失败，原始结果见 Plan 字段",
-			Logs:    []string{"parse error: " + err.Error()},
+			Summary: "[dry-run] 跳过实际执行",
+			Logs:    []string{"dry-run mode"},
 		}, nil
 	}
 
-	// 5. dry-run 模式：只返回计划，不执行
-	if req.DryRun {
-		result.Logs = append(result.Logs, "[dry-run] 计划已生成，实际修改已跳过")
-		return result, nil
-	}
-
-	// 6. 如果需要实际修改代码，调用 claude-code CLI
-	if req.RepoPath != "" && !req.DryRun {
-		if err := runClaudeCodeCLI(ctx, req.RepoPath, result.Plan); err != nil {
-			result.Logs = append(result.Logs, "claude-code CLI 执行: "+err.Error())
-			// 不视为失败，计划已生成
-		} else {
-			result.Logs = append(result.Logs, "claude-code CLI 执行完成")
+	// 准备日志文件
+	os.MkdirAll(logsDir, 0755) //nolint
+	var logFile *os.File
+	if req.TriggerID != "" {
+		if f, err := os.Create(LogFilePath(req.TriggerID)); err == nil {
+			logFile = f
+			defer logFile.Close()
 		}
 	}
 
-	return result, nil
-}
-
-// getRepoInfo 获取仓库基本信息（最近提交、文件树等）
-func getRepoInfo(ctx context.Context, repoPath string) (string, error) {
-	if repoPath == "" {
-		return "", nil
+	// 构建命令（pipe 模式，只分析不修改）
+	dir := req.RepoPath
+	if dir != "" {
+		dir = expandHome(dir)
 	}
-	// git log
-	logResult, err := RunShell(ctx, repoPath, "git", "log", "--max-count=5", "--oneline")
+	cmd := exec.CommandContext(ctx, "claude", "-p", req.UserPrompt)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+
+	// 管道读取 stdout，逐行写入日志
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", err
+		return &model.ClaudeExecResult{Success: false, Error: err.Error()}, err
 	}
-	// 文件树（只看第一层）
-	lsResult, _ := RunShell(ctx, repoPath, "ls", "-la")
-	return fmt.Sprintf("最近提交:\n%s\n\n目录结构:\n%s", logResult.Stdout, lsResult.Stdout), nil
-}
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
 
-// buildCodeTaskPrompt 构建代码任务提示词
-func buildCodeTaskPrompt(req *model.ClaudeExecRequest, repoInfo string) string {
-	var sb strings.Builder
-	sb.WriteString("任务类型: " + req.TaskType + "\n\n")
-	sb.WriteString("任务描述:\n" + req.UserPrompt + "\n\n")
-	if repoInfo != "" {
-		sb.WriteString("仓库信息:\n" + repoInfo + "\n\n")
-	}
-	if req.Context != "" {
-		sb.WriteString("补充上下文:\n" + req.Context + "\n\n")
-	}
-	sb.WriteString(`
-请输出以下 JSON 格式的执行计划：
-{
-  "plan": "<详细的修改计划，分步骤描述>",
-  "summary": "<一句话摘要>",
-  "files_changed": ["<预计修改的文件路径>"],
-  "sql_suggestions": ["<涉及的SQL操作建议>"],
-  "logs": ["<备注信息>"]
-}`)
-	return sb.String()
-}
-
-// parseCodeResult 解析 LLM 代码任务结果
-func parseCodeResult(raw string) (*model.ClaudeExecResult, error) {
-	// 提取 JSON
-	jsonStr := extractJSON(raw)
-	if jsonStr == "" {
-		jsonStr = raw
+	if err := cmd.Start(); err != nil {
+		return &model.ClaudeExecResult{
+			Success: false,
+			Error:   fmt.Sprintf("claude CLI 启动失败: %v", err),
+		}, err
 	}
 
-	var result model.ClaudeExecResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return nil, fmt.Errorf("parse code result: %w", err)
-	}
-	result.Success = true
-	return &result, nil
-}
+	log.Printf("[claude] trigger=%s started (dir=%s)", req.TriggerID, dir)
 
-// runClaudeCodeCLI 调用 claude-code CLI 执行实际代码修改
-// 前提：系统已安装 claude-code CLI
-func runClaudeCodeCLI(ctx context.Context, repoPath, plan string) error {
-	// 将计划写入临时文件，传给 claude-code
-	// claude-code 命令格式：claude --print "<prompt>" 或通过 stdin
-	// 这里用 --print 模式（非交互）
-	prompt := "请根据以下计划修改代码：\n\n" + plan
-	result, err := RunShell(ctx, repoPath, "claude", "--print", prompt)
-	if err != nil {
-		return fmt.Errorf("claude CLI: %w (stdout: %s)", err, truncateStr(result.Stdout, 200))
+	var outputBuf strings.Builder
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		outputBuf.WriteString(line)
+		outputBuf.WriteString("\n")
+		if logFile != nil {
+			fmt.Fprintln(logFile, line)
+			logFile.Sync() //nolint
+		}
 	}
-	return nil
-}
+	if scanner.Err() != nil {
+		remaining, _ := io.ReadAll(stdoutPipe)
+		if len(remaining) > 0 {
+			outputBuf.Write(remaining)
+			if logFile != nil {
+				logFile.Write(remaining) //nolint
+			}
+		}
+	}
 
-// extractJSON 从文本提取 JSON（重用 parser 逻辑）
-func extractJSON(text string) string {
-	// 简单实现：找第一个 { 到最后一个 }
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end == -1 || start >= end {
-		return ""
+	waitErr := cmd.Wait()
+
+	if ctx.Err() != nil {
+		cancelMsg := "执行被取消"
+		if ctx.Err() == context.DeadlineExceeded {
+			cancelMsg = "执行超时"
+		}
+		if logFile != nil {
+			fmt.Fprintf(logFile, "\n[CANCELLED] %s\n", cancelMsg)
+		}
+		return &model.ClaudeExecResult{
+			Success: false,
+			Error:   cancelMsg,
+			Plan:    outputBuf.String(),
+		}, ctx.Err()
 	}
-	return text[start : end+1]
+
+	if waitErr != nil {
+		errMsg := fmt.Sprintf("claude CLI: %v (stderr: %s)", waitErr, truncateStr(stderrBuf.String(), 300))
+		if logFile != nil {
+			fmt.Fprintln(logFile, "\n[ERROR] "+errMsg)
+		}
+		return &model.ClaudeExecResult{
+			Success: false,
+			Error:   errMsg,
+			Summary: stderrBuf.String(),
+			Plan:    outputBuf.String(),
+		}, waitErr
+	}
+
+	output := strings.TrimSpace(outputBuf.String())
+	summary := output
+	if len([]rune(summary)) > 500 {
+		summary = string([]rune(summary)[:500]) + "..."
+	}
+
+	if logFile != nil {
+		fmt.Fprintln(logFile, "\n[DONE]")
+	}
+
+	return &model.ClaudeExecResult{
+		Success: true,
+		Summary: summary,
+		Plan:    output,
+		Logs:    []string{"claude CLI 执行完成"},
+	}, nil
 }

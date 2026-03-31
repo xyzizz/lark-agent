@@ -77,6 +77,7 @@ function statusBadge(status) {
     running: ['running', '执行中'],
     pending: ['default', '待处理'],
     skipped: ['warning', '跳过'],
+    cancelled: ['warning', '已取消'],
   };
   const [cls, label] = map[status] || ['default', status];
   return `<span class="badge badge-${cls}">${label}</span>`;

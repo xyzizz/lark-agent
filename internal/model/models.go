@@ -12,20 +12,25 @@ type AppSetting struct {
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
+// RouteRepo 项目关联的仓库
+type RouteRepo struct {
+	Path        string `json:"path"`
+	Description string `json:"description"`
+}
+
 // ProjectRoute 项目路由配置
 type ProjectRoute struct {
-	ID        string    `json:"id" db:"id"`
-	Name      string    `json:"name" db:"name"`
-	Keywords  []string  `json:"keywords"`  // 序列化为 JSON 存储
-	RepoPath  string    `json:"repo_path" db:"repo_path"`
-	RemoteURL string    `json:"remote_url" db:"remote_url"`
-	DocSource string    `json:"doc_source" db:"doc_source"`
-	MCPList   []string  `json:"mcp_list"`   // 序列化为 JSON 存储
-	SkillList []string  `json:"skill_list"` // 序列化为 JSON 存储
-	Priority  int       `json:"priority" db:"priority"`
-	Enabled   bool      `json:"enabled" db:"enabled"`
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+	ID        string      `json:"id" db:"id"`
+	Name      string      `json:"name" db:"name"`
+	Keywords  []string    `json:"keywords"`   // 序列化为 JSON 存储
+	Repos     []RouteRepo `json:"repos"`      // 本地仓库列表，序列化为 JSON 存储
+	DocSource string      `json:"doc_source" db:"doc_source"`
+	MCPList   []string    `json:"mcp_list"`   // 序列化为 JSON 存储
+	SkillList []string    `json:"skill_list"` // 序列化为 JSON 存储
+	Priority  int         `json:"priority" db:"priority"`
+	Enabled   bool        `json:"enabled" db:"enabled"`
+	CreatedAt time.Time   `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at" db:"updated_at"`
 }
 
 // ToolConfig MCP / shell / skill 工具配置
@@ -103,6 +108,20 @@ type AuditLog struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
+// ChatMessage 对话消息记录（双向）
+type ChatMessage struct {
+	ID        string    `json:"id"`
+	TriggerID string    `json:"trigger_id"`
+	Direction string    `json:"direction"` // incoming | outgoing
+	ChatID    string    `json:"chat_id"`
+	ChatType  string    `json:"chat_type"` // p2p | group
+	SenderID  string    `json:"sender_id"`
+	MessageID string    `json:"message_id"` // 飞书 message_id，用于跳转
+	MsgType   string    `json:"msg_type"`   // text | interactive
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // ─── 意图识别结构 ─────────────────────────────────────────────
 
 // IntentResult LLM 意图识别结果（要求模型严格输出 JSON）
@@ -175,12 +194,13 @@ type MCPResponse struct {
 
 // ClaudeExecRequest Claude Code 执行请求
 type ClaudeExecRequest struct {
-	RepoPath    string `json:"repo_path"`
-	TaskType    string `json:"task_type"`   // issue | requirement
+	RepoPath     string `json:"repo_path"`
+	TaskType     string `json:"task_type"`   // issue | requirement
+	TriggerID    string `json:"trigger_id"`  // 用于日志文件命名
 	SystemPrompt string `json:"system_prompt"`
-	UserPrompt  string `json:"user_prompt"`
-	Context     string `json:"context"`     // 附加上下文
-	DryRun      bool   `json:"dry_run"`
+	UserPrompt   string `json:"user_prompt"`
+	Context      string `json:"context"`     // 附加上下文
+	DryRun       bool   `json:"dry_run"`
 }
 
 // ClaudeExecResult Claude Code 执行结果
@@ -206,7 +226,6 @@ type GitResult struct {
 // MRRequest 创建 MR/PR 的请求
 type MRRequest struct {
 	RepoPath    string `json:"repo_path"`
-	RemoteURL   string `json:"remote_url"`
 	Branch      string `json:"branch"`
 	BaseBranch  string `json:"base_branch"`
 	Title       string `json:"title"`

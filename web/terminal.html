@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>终端 - 飞书智能助手</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+.terminal-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  flex-shrink: 0;
+}
+.terminal-toolbar select, .terminal-toolbar input {
+  padding: 6px 10px;
+  border: 1px solid var(--gray-2);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.terminal-toolbar select { min-width: 200px; }
+#terminal-box {
+  flex: 1;
+  min-height: 400px;
+  background: #1e1e1e;
+  border-radius: var(--radius);
+  padding: 4px;
+}
+.page-content {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--header-h));
+}
+.conn-status {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.conn-status.connected { background: var(--success); }
+.conn-status.disconnected { background: var(--error); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">🤖</span><span class="logo-text">飞书智能助手</span></div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+      <a class="nav-item" href="/messages"><span class="icon">💬</span><span class="label">对话记录</span></a>
+      <a class="nav-item active" href="/terminal"><span class="icon">🖥️</span><span class="label">终端</span></a>
+    </nav>
+  </aside>
+
+  <div class="main-content">
+    <div class="topbar"><span class="topbar-title">Claude Code 终端</span></div>
+    <div class="page-content">
+
+      <div class="terminal-toolbar">
+        <span id="conn-indicator"><span class="conn-status disconnected"></span>未连接</span>
+        <select id="repo-select">
+          <option value="">选择仓库目录...</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="startSession()">▶ 启动会话</button>
+        <button class="btn btn-danger btn-sm" onclick="stopSession()">■ 结束会话</button>
+      </div>
+
+      <div class="terminal-container">
+        <div id="terminal-box"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="/static/app.js"></script>
+<script>
+let term = null;
+let socket = null;
+let fitAddon = null;
+
+function initTerminal() {
+  if (term) return;
+  term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'SF Mono', 'Fira Code', Consolas, monospace",
+    theme: {
+      background: '#1e1e1e',
+      foreground: '#d4d4d4',
+      cursor: '#d4d4d4',
+    },
+    scrollback: 5000,
+  });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('terminal-box'));
+  fitAddon.fit();
+
+  // 监听窗口大小变化
+  window.addEventListener('resize', () => {
+    if (fitAddon) fitAddon.fit();
+    sendResize();
+  });
+
+  // 输入 → WebSocket
+  term.onData(data => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(data);
+    }
+  });
+
+  term.writeln('选择仓库目录后点击「启动会话」开始 Claude Code 交互式终端。');
+  term.writeln('');
+}
+
+function startSession() {
+  const urlParams = new URLSearchParams(location.search);
+  const triggerID = urlParams.get('trigger_id') || '';
+  const dir = document.getElementById('repo-select').value;
+
+  if (socket) {
+    stopSession();
+  }
+
+  term.clear();
+  if (triggerID) {
+    term.writeln(`\x1b[33m[连接中] 接入正在执行的任务 ${triggerID.substring(0,8)}...\x1b[0m`);
+  } else {
+    term.writeln(`\x1b[33m[连接中] 启动 claude 会话...\x1b[0m`);
+  }
+  if (dir) term.writeln(`\x1b[90m工作目录: ${dir}\x1b[0m`);
+  term.writeln('');
+
+  // 构建 WebSocket URL
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  let wsUrl;
+  if (triggerID) {
+    wsUrl = `${proto}//${location.host}/ws/terminal?trigger_id=${encodeURIComponent(triggerID)}`;
+  } else {
+    wsUrl = `${proto}//${location.host}/ws/terminal?dir=${encodeURIComponent(dir)}`;
+  }
+
+  socket = new WebSocket(wsUrl);
+  socket.binaryType = 'arraybuffer';
+
+  socket.onopen = () => {
+    setConnStatus(true);
+    sendResize();
+    term.focus();
+  };
+
+  socket.onmessage = (evt) => {
+    const data = typeof evt.data === 'string' ? evt.data : new Uint8Array(evt.data);
+    term.write(data);
+  };
+
+  socket.onclose = () => {
+    setConnStatus(false);
+    term.writeln('\r\n\x1b[33m[会话结束]\x1b[0m');
+    socket = null;
+  };
+
+  socket.onerror = () => {
+    setConnStatus(false);
+    term.writeln('\r\n\x1b[31m[连接错误]\x1b[0m');
+  };
+}
+
+function stopSession() {
+  if (socket) {
+    socket.close();
+    socket = null;
+  }
+  setConnStatus(false);
+}
+
+function sendResize() {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !term) return;
+  const msg = '\x01RESIZE:' + term.cols + ':' + term.rows;
+  socket.send(msg);
+}
+
+function setConnStatus(connected) {
+  const el = document.getElementById('conn-indicator');
+  if (connected) {
+    el.innerHTML = '<span class="conn-status connected"></span>已连接';
+  } else {
+    el.innerHTML = '<span class="conn-status disconnected"></span>未连接';
+  }
+}
+
+// 加载仓库列表（从项目路由中提取）
+async function loadRepoOptions() {
+  const select = document.getElementById('repo-select');
+  try {
+    const res = await API.get('/api/routes');
+    if (res.code !== 0) return;
+    const routes = res.data || [];
+    const options = ['<option value="">选择仓库目录...</option>'];
+    routes.forEach(r => {
+      (r.repos || []).forEach(repo => {
+        const label = repo.description ? `${r.name} — ${repo.description}` : `${r.name} — ${repo.path}`;
+        options.push(`<option value="${repo.path}">${label}</option>`);
+      });
+    });
+    select.innerHTML = options.join('');
+
+    // 如果 URL 带了 dir 参数，自动选中
+    const urlDir = new URLSearchParams(location.search).get('dir');
+    if (urlDir) {
+      select.value = urlDir;
+    }
+  } catch(e) { /* ignore */ }
+}
+
+// 页面初始化
+initTerminal();
+loadRepoOptions();
+
+// 如果 URL 带了 autostart=1，自动启动
+if (new URLSearchParams(location.search).get('autostart') === '1') {
+  setTimeout(startSession, 500);
+}
+</script>
+</body>
+</html>

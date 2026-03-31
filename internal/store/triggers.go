@@ -47,6 +47,13 @@ func UpdateTriggerStatus(id, status, summary, mrLink, sqlSuggestions, errMsg str
 	return err
 }
 
+// UpdateTriggerIntent 更新意图识别和路由匹配结果
+func UpdateTriggerIntent(id, intent string, confidence float64, matchedProject string) error {
+	_, err := DB.Exec(`UPDATE triggers SET intent=?, confidence=?, matched_project=? WHERE id=?`,
+		intent, confidence, matchedProject, id)
+	return err
+}
+
 func SetTriggerStarted(id string) error {
 	now := nowStr()
 	_, err := DB.Exec(`UPDATE triggers SET status='running', started_at=? WHERE id=?`, now, id)

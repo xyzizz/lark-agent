@@ -3,8 +3,8 @@ package workflow
 
 import (
 	"context"
-	"feishu-agent/internal/config"
 	"encoding/json"
+	"feishu-agent/internal/config"
 	"feishu-agent/internal/executor"
 	"feishu-agent/internal/feishu"
 	"feishu-agent/internal/intent"
@@ -13,6 +13,8 @@ import (
 	"feishu-agent/internal/store"
 	"fmt"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -47,7 +49,7 @@ func (r *Runner) HandleMessage(msg *model.FeishuMessage) {
 }
 
 // run 同步执行处理流程（内部）
-func (r *Runner) run(ctx context.Context, msg *model.FeishuMessage) error {
+func (r *Runner) run(ctx context.Context, msg *model.FeishuMessage) (retErr error) {
 	cfg := config.Get()
 
 	// 1. 创建触发记录
@@ -66,6 +68,30 @@ func (r *Runner) run(ctx context.Context, msg *model.FeishuMessage) error {
 	}
 	store.SetTriggerStarted(trigger.ID) //nolint
 
+	// 10 分钟超时 + 手动取消支持
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	executor.RegisterJob(trigger.ID, cancel)
+	defer executor.UnregisterJob(trigger.ID)
+
+	// 安全网：确保 trigger 状态一定会被更新，防止卡在 running
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[runner] trigger=%s panic: %v", trigger.ID, r)
+			store.UpdateTriggerStatus(trigger.ID, "failed", "", "", "", fmt.Sprintf("panic: %v", r)) //nolint
+		}
+		// 检查是否仍是 running 状态
+		if t, _ := store.GetTrigger(trigger.ID); t != nil && (t.Status == "pending" || t.Status == "running") {
+			errMsg := "执行异常中断"
+			if ctx.Err() == context.DeadlineExceeded {
+				errMsg = "执行超时（10分钟）"
+			} else if ctx.Err() == context.Canceled {
+				errMsg = "已手动取消"
+			}
+			store.UpdateTriggerStatus(trigger.ID, "cancelled", "", "", "", errMsg) //nolint
+		}
+	}()
+
 	wfCtx := &model.WorkflowContext{
 		TriggerID:  trigger.ID,
 		Message:    msg,
@@ -77,16 +103,19 @@ func (r *Runner) run(ctx context.Context, msg *model.FeishuMessage) error {
 
 	// 2. 意图识别
 	log.Printf("[runner] trigger=%s recognizing intent for: %s", trigger.ID, truncate(msg.Content, 80))
-	r.runnerLogStep(wfCtx, "intent_recognition", "llm", msg.Content)
+	step := logStep(wfCtx, "intent_recognition", "llm", msg.Content)
 
 	intentResult, err := r.recognizer.Recognize(ctx, msg.Content)
 	if err != nil {
+		finishStep(step, "", err.Error())
 		r.finishWithError(ctx, trigger, wfCtx, "意图识别失败: "+err.Error())
 		return err
 	}
+	finishStep(step, fmt.Sprintf("intent=%s confidence=%.2f", intentResult.Intent, intentResult.Confidence), "")
 	wfCtx.Intent = intentResult
 	trigger.Intent = intentResult.Intent
 	trigger.Confidence = intentResult.Confidence
+	store.UpdateTriggerIntent(trigger.ID, intentResult.Intent, intentResult.Confidence, "") //nolint
 
 	log.Printf("[runner] trigger=%s intent=%s confidence=%.2f", trigger.ID, intentResult.Intent, intentResult.Confidence)
 
@@ -126,6 +155,7 @@ func (r *Runner) run(ctx context.Context, msg *model.FeishuMessage) error {
 	wfCtx.Route = route
 	if route != nil {
 		trigger.MatchedProject = route.Name
+		store.UpdateTriggerIntent(trigger.ID, trigger.Intent, trigger.Confidence, route.Name) //nolint
 	}
 
 	// 5. 分发到对应工作流
@@ -155,11 +185,6 @@ func (r *Runner) run(ctx context.Context, msg *model.FeishuMessage) error {
 	return err
 }
 
-// runnerLogStep Runner 专用步骤记录（避免与 issue.go 包级 logStep 冲突）
-func (r *Runner) runnerLogStep(wfCtx *model.WorkflowContext, name, stepType, input string) *model.TriggerStep {
-	return logStep(wfCtx, name, stepType, input)
-}
-
 // finishWithError 整体失败处理
 func (r *Runner) finishWithError(ctx context.Context, trigger *model.Trigger, wfCtx *model.WorkflowContext, errMsg string) {
 	store.UpdateTriggerStatus(trigger.ID, "failed", "", "", "", errMsg) //nolint
@@ -172,6 +197,10 @@ func (r *Runner) sendReply(ctx context.Context, msg *model.FeishuMessage, text s
 		log.Printf("[runner] feishu reply (no client): %s", text)
 		return
 	}
+	if !r.isSendAllowed(msg) {
+		log.Printf("[runner] send blocked: chat_id=%s sender=%s not in whitelist", msg.ChatID, msg.SenderID)
+		return
+	}
 	if err := r.feishuClient.SendTextMessage(ctx, msg.ChatID, text); err != nil {
 		log.Printf("[runner] send reply error: %v", err)
 	}
@@ -181,6 +210,10 @@ func (r *Runner) sendReply(ctx context.Context, msg *model.FeishuMessage, text s
 func (r *Runner) sendResult(ctx context.Context, msg *model.FeishuMessage, triggerID, intentType, summary, mrLink, sqlSuggestions string, success bool) {
 	if r.feishuClient == nil {
 		log.Printf("[runner] result (no feishu client): intent=%s summary=%s mr=%s", intentType, truncate(summary, 100), mrLink)
+		return
+	}
+	if !r.isSendAllowed(msg) {
+		log.Printf("[runner] send result blocked: chat_id=%s sender=%s not in whitelist", msg.ChatID, msg.SenderID)
 		return
 	}
 
@@ -210,35 +243,39 @@ func (r *Runner) sendResult(ctx context.Context, msg *model.FeishuMessage, trigg
 	}
 }
 
-// ─── 工具函数 ─────────────────────────────────────────────────
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// isSendAllowed 检查是否允许向该消息的来源发送回复
+// 如果配置了白名单，只允许向白名单中的用户发送消息
+func (r *Runner) isSendAllowed(msg *model.FeishuMessage) bool {
+	settings, _ := store.GetAllSettings()
+	allowed := settings["feishu_allowed_senders"]
+	if allowed == "" {
+		return true // 未配置白名单，允许所有
 	}
-	return s[:n] + "..."
+	// 检查发送者是否在白名单中
+	if msg.SenderID == "" {
+		return false
+	}
+	for _, id := range splitAndTrim(allowed) {
+		if id == msg.SenderID {
+			return true
+		}
+	}
+	return false
 }
+
+// splitAndTrim 按逗号分隔并去空格
+func splitAndTrim(s string) []string {
+	var result []string
+	for _, part := range strings.Split(s, ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+// ─── 工具函数 ─────────────────────────────────────────────────
 
 func parseJSONArray(s string, out *[]string) error {
 	return json.Unmarshal([]byte(s), out)
-}
-
-// AuditAction 记录审计日志
-func AuditAction(triggerID, action, riskLevel, detail, result string) {
-	store.CreateAuditLog(&model.AuditLog{ //nolint
-		TriggerID: triggerID,
-		Action:    action,
-		RiskLevel: riskLevel,
-		Detail:    detail,
-		Operator:  "agent",
-		Result:    result,
-	})
-}
-
-// BuildGitExecutor 根据路由配置创建 git 执行器
-func BuildGitExecutor(route *model.ProjectRoute) *executor.GitExecutor {
-	if route == nil || route.RepoPath == "" {
-		return nil
-	}
-	return executor.NewGitExecutor(route.RepoPath)
 }

@@ -3,9 +3,12 @@ package api
 import (
 	"feishu-agent/internal/intent"
 	"feishu-agent/internal/model"
+	"feishu-agent/internal/store"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // TestIntent POST /api/test/intent
@@ -29,35 +32,54 @@ func TestIntent(c *gin.Context) {
 }
 
 // ManualTrigger POST /api/manual/trigger
-// 手动触发工作流（不通过飞书消息，直接测试）
+// 手动触发工作流，sender_id 必须是白名单中的用户
 func ManualTrigger(c *gin.Context) {
 	var req struct {
-		Message    string `json:"message"`
-		SenderName string `json:"sender_name"`
-		ChatID     string `json:"chat_id"`
+		Message  string `json:"message"`
+		SenderID string `json:"sender_id"` // 白名单用户的 open_id
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Message == "" {
 		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Message: "message is required"})
 		return
 	}
 
-	// 获取全局 Runner（在 server.go 中注入）
 	runner := GetRunner()
 	if runner == nil {
 		c.JSON(http.StatusServiceUnavailable, model.APIResponse{Code: 503, Message: "runner not initialized"})
 		return
 	}
 
+	// 必须选择一个白名单用户
+	settings, _ := store.GetAllSettings()
+	allowed := settings["feishu_allowed_senders"]
+	if req.SenderID == "" {
+		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Message: "请选择发送用户"})
+		return
+	}
+	if allowed != "" {
+		found := false
+		for _, id := range strings.Split(allowed, ",") {
+			if strings.TrimSpace(id) == req.SenderID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.JSON(http.StatusForbidden, model.APIResponse{Code: 403, Message: "该用户不在白名单中"})
+			return
+		}
+	}
+
 	msg := &model.FeishuMessage{
-		MessageID:  "manual-" + c.GetString("request_id"),
-		SenderID:   "manual",
-		SenderName: req.SenderName,
-		ChatID:     req.ChatID,
+		MessageID:  "manual-" + uuid.NewString()[:8],
+		SenderID:   req.SenderID,
+		SenderName: req.SenderID,
+		ChatID:     req.SenderID, // 私聊的 chatID 由飞书自动处理，这里用 senderID 占位
 		ChatType:   "p2p",
 		Content:    req.Message,
 	}
 	runner.HandleMessage(msg)
-	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "trigger submitted, processing in background"})
+	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "已提交，正在后台处理"})
 }
 
 // runner 全局引用（由 server 注入）

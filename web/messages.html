@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>对话记录 - 飞书智能助手</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* 对话气泡样式 */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 800px;
+}
+.chat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.chat-row.incoming { justify-content: flex-start; }
+.chat-row.outgoing { justify-content: flex-end; }
+
+.chat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.chat-row.incoming .chat-avatar { background: #e6f7ff; }
+.chat-row.outgoing .chat-avatar { background: #f6ffed; }
+
+.chat-bubble {
+  max-width: 520px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  position: relative;
+}
+.chat-row.incoming .chat-bubble {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-top-left-radius: 4px;
+}
+.chat-row.outgoing .chat-bubble {
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-top-right-radius: 4px;
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--gray-3);
+}
+.chat-row.outgoing .chat-meta { justify-content: flex-end; }
+
+.chat-link {
+  color: var(--primary);
+  text-decoration: none;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.chat-link:hover { text-decoration: underline; }
+
+.chat-type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: var(--gray-1);
+  color: var(--gray-3);
+  border: 1px solid var(--gray-2);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--gray-3);
+}
+.empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><span class="logo-icon">🤖</span><span class="logo-text">飞书智能助手</span></div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="/"><span class="icon">📊</span><span class="label">仪表盘</span></a>
+      <a class="nav-item" href="/settings"><span class="icon">⚙️</span><span class="label">飞书配置</span></a>
+      <a class="nav-item" href="/routes"><span class="icon">🗺️</span><span class="label">项目路由</span></a>
+      <a class="nav-item" href="/tools"><span class="icon">🔧</span><span class="label">工具配置</span></a>
+      <a class="nav-item" href="/harness"><span class="icon">🛡️</span><span class="label">执行策略</span></a>
+      <a class="nav-item" href="/triggers"><span class="icon">📋</span><span class="label">触发记录</span></a>
+      <a class="nav-item active" href="/messages"><span class="icon">💬</span><span class="label">对话记录</span></a>
+          <a class="nav-item" href="/terminal"><span class="icon">🖥️</span><span class="label">终端</span></a>
+    </nav>
+  </aside>
+
+  <div class="main-content">
+    <div class="topbar"><span class="topbar-title">对话记录</span></div>
+    <div class="page-content">
+
+      <div class="card">
+        <div class="card-title">
+          <span>私聊消息</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-default btn-sm" onclick="loadMessages()">🔄 刷新</button>
+          </div>
+        </div>
+
+        <div id="chat-list">
+          <div class="empty-state">
+            <div class="icon">💬</div>
+            <div>暂无消息记录</div>
+          </div>
+        </div>
+
+        <div class="pagination" id="pagination"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+<script>
+let currentPage = 1;
+const pageSize = 50;
+
+async function loadMessages(page) {
+  if (page) currentPage = page;
+  const res = await API.get(`/api/messages?page=${currentPage}&size=${pageSize}`);
+  if (res.code !== 0) {
+    Toast.error('加载失败：' + res.message);
+    return;
+  }
+
+  const { items, total } = res.data;
+  const container = document.getElementById('chat-list');
+
+  if (!items || items.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">💬</div>
+        <div>暂无消息记录</div>
+      </div>`;
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+
+  // 按时间正序显示（API 返回倒序，翻转一下）
+  const sorted = [...items].reverse();
+
+  let html = '<div class="chat-container">';
+  for (const m of sorted) {
+    const isOut = m.direction === 'outgoing';
+    const dir = isOut ? 'outgoing' : 'incoming';
+    const avatar = isOut ? '🤖' : '👤';
+    const time = formatTime(m.created_at);
+    const feishuLink = m.message_id
+      ? `https://applink.feishu.cn/client/message/link?body=${encodeURIComponent(JSON.stringify({token: m.message_id}))}`
+      : '';
+    const linkHtml = feishuLink
+      ? `<a class="chat-link" href="${feishuLink}" target="_blank">↗ 飞书</a>`
+      : '';
+    const typeBadge = m.msg_type === 'interactive'
+      ? '<span class="chat-type-badge">卡片</span>'
+      : '';
+
+    html += `
+      <div class="chat-row ${dir}">
+        ${isOut ? '' : `<div class="chat-avatar">${avatar}</div>`}
+        <div>
+          <div class="chat-bubble">${typeBadge} ${escapeHtml(m.content)}</div>
+          <div class="chat-meta">
+            <span>${time}</span>
+            ${linkHtml}
+          </div>
+        </div>
+        ${isOut ? `<div class="chat-avatar">${avatar}</div>` : ''}
+      </div>`;
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  // 分页
+  renderPagination(total);
+}
+
+function renderPagination(total) {
+  const totalPages = Math.ceil(total / pageSize);
+  if (totalPages <= 1) {
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+  let html = `<span class="page-info">共 ${total} 条</span>`;
+  if (currentPage > 1) {
+    html += `<button class="page-btn" onclick="loadMessages(${currentPage - 1})">上一页</button>`;
+  }
+  html += `<span class="page-info">${currentPage} / ${totalPages}</span>`;
+  if (currentPage < totalPages) {
+    html += `<button class="page-btn" onclick="loadMessages(${currentPage + 1})">下一页</button>`;
+  }
+  document.getElementById('pagination').innerHTML = html;
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text || '';
+  return div.innerHTML;
+}
+
+loadMessages();
+</script>
+</body>
+</html>

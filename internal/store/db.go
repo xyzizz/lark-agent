@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -57,8 +58,7 @@ func migrate(db *sql.DB) error {
 			id         TEXT PRIMARY KEY,
 			name       TEXT NOT NULL,
 			keywords   TEXT NOT NULL DEFAULT '[]',
-			repo_path  TEXT NOT NULL DEFAULT '',
-			remote_url TEXT NOT NULL DEFAULT '',
+			repos      TEXT NOT NULL DEFAULT '[]',
 			doc_source TEXT NOT NULL DEFAULT '',
 			mcp_list   TEXT NOT NULL DEFAULT '[]',
 			skill_list TEXT NOT NULL DEFAULT '[]',
@@ -135,6 +135,20 @@ func migrate(db *sql.DB) error {
 			event_id     TEXT PRIMARY KEY,
 			processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS chat_messages (
+			id          TEXT PRIMARY KEY,
+			trigger_id  TEXT NOT NULL DEFAULT '',
+			direction   TEXT NOT NULL DEFAULT '',
+			chat_id     TEXT NOT NULL DEFAULT '',
+			chat_type   TEXT NOT NULL DEFAULT '',
+			sender_id   TEXT NOT NULL DEFAULT '',
+			message_id  TEXT NOT NULL DEFAULT '',
+			msg_type    TEXT NOT NULL DEFAULT 'text',
+			content     TEXT NOT NULL DEFAULT '',
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_triggers_created_at ON triggers(created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_trigger_steps_trigger_id ON trigger_steps(trigger_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_logs_trigger_id ON audit_logs(trigger_id)`,
@@ -146,6 +160,12 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("migrate exec: %w\nSQL: %s", err, stmt)
 		}
 	}
+
+	// 迁移：repo_path → repo_paths（旧列存在时转换数据）
+	migrateRepoPaths(db)
+
+	// 清理已废弃的提示词模板类型
+	db.Exec(`DELETE FROM prompt_templates WHERE template_type IN ('issue', 'requirement')`) //nolint
 
 	// 写入默认提示词模板（如果不存在）
 	if err := seedDefaultPrompts(db); err != nil {
@@ -191,54 +211,6 @@ func seedDefaultPrompts(db *sql.DB) error {
   "summary": "<一句话摘要>"
 }`,
 		},
-		{
-			"tpl-issue-default",
-			"问题排查提示词",
-			"issue",
-			`你是一个资深后端工程师，正在排查一个线上问题。
-
-消息内容：{{.Message}}
-项目信息：{{.ProjectInfo}}
-查询结果：{{.QueryResults}}
-
-请分析并给出：
-1. 问题根因（配置问题 / 数据问题 / 代码问题 / 暂时无法确认）
-2. 详细分析过程
-3. 修复建议
-4. 涉及的 SQL 操作建议（如有）
-
-以 JSON 格式输出：
-{
-  "root_cause_type": "<config|data|code|unknown>",
-  "analysis": "<详细分析>",
-  "fix_suggestion": "<修复建议>",
-  "sql_suggestions": ["<SQL1>", "<SQL2>"],
-  "confidence": <0.0-1.0>
-}`,
-		},
-		{
-			"tpl-requirement-default",
-			"需求编写提示词",
-			"requirement",
-			`你是一个资深技术负责人，正在为一个新需求编写实现方案。
-
-需求描述：{{.Message}}
-项目信息：{{.ProjectInfo}}
-相关文档：{{.DocContent}}
-
-请输出完整的实现方案，以 JSON 格式返回：
-{
-  "background": "<背景>",
-  "objective": "<目标>",
-  "scope": "<范围>",
-  "technical_plan": "<技术方案详细描述>",
-  "db_changes": ["<数据库变更说明>"],
-  "sql_suggestions": ["<建议SQL>"],
-  "risks": ["<风险点>"],
-  "test_suggestions": ["<测试建议>"],
-  "estimated_files": ["<预计修改的文件路径>"]
-}`,
-		},
 	}
 
 	for _, t := range templates {
@@ -251,6 +223,55 @@ func seedDefaultPrompts(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// migrateRepoPaths 将旧的 repo_path/repo_paths 迁移为 repos JSON 数组
+func migrateRepoPaths(db *sql.DB) {
+	// 迁移 repo_path（单值字符串）→ repos
+	var countOld int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('project_routes') WHERE name='repo_path'`).Scan(&countOld)
+	if countOld > 0 {
+		db.Exec(`ALTER TABLE project_routes ADD COLUMN repos TEXT NOT NULL DEFAULT '[]'`) //nolint
+		rows, err := db.Query(`SELECT id, repo_path FROM project_routes WHERE repo_path != ''`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id, repoPath string
+				if rows.Scan(&id, &repoPath) == nil && repoPath != "" {
+					reposJSON := fmt.Sprintf(`[{"path":"%s","description":""}]`, repoPath)
+					db.Exec(`UPDATE project_routes SET repos = ? WHERE id = ?`, reposJSON, id) //nolint
+				}
+			}
+		}
+		log.Printf("[store] migrated repo_path → repos")
+		return
+	}
+
+	// 迁移 repo_paths（字符串数组）→ repos
+	var countPaths int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('project_routes') WHERE name='repo_paths'`).Scan(&countPaths)
+	if countPaths > 0 {
+		db.Exec(`ALTER TABLE project_routes ADD COLUMN repos TEXT NOT NULL DEFAULT '[]'`) //nolint
+		rows, err := db.Query(`SELECT id, repo_paths FROM project_routes WHERE repo_paths != '[]' AND repo_paths != ''`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var id, pathsStr string
+				if rows.Scan(&id, &pathsStr) == nil {
+					var paths []string
+					if json.Unmarshal([]byte(pathsStr), &paths) == nil && len(paths) > 0 {
+						var repos []map[string]string
+						for _, p := range paths {
+							repos = append(repos, map[string]string{"path": p, "description": ""})
+						}
+						reposJSON, _ := json.Marshal(repos)
+						db.Exec(`UPDATE project_routes SET repos = ? WHERE id = ?`, string(reposJSON), id) //nolint
+					}
+				}
+			}
+		}
+		log.Printf("[store] migrated repo_paths → repos")
+	}
 }
 
 // Close 关闭数据库连接
