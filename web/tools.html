@@ -70,20 +70,16 @@
         </div>
       </div>
 
-      <!-- 提示词模板 -->
-      <div class="card">
-        <div class="card-title">
-          提示词模板
-          <button class="btn btn-primary btn-sm" onclick="openCreatePrompt()">+ 新增模板</button>
+      <!-- 提示词模板（tools/prompt/*.md） -->
+      <div class="card tool-section">
+        <div class="tool-section-header">
+          <div class="tool-section-title">📝 提示词模板 <span class="tool-section-count" id="prompt-count">0</span></div>
+          <span style="font-size:12px;color:var(--gray-3)">存储于 tools/prompt/*.md</span>
         </div>
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr><th>名称</th><th>类型</th><th>内容预览</th><th>状态</th><th>操作</th></tr>
-            </thead>
-            <tbody id="prompts-tbody">
-              <tr><td colspan="5" style="text-align:center;color:#999;padding:24px">加载中...</td></tr>
-            </tbody>
+            <thead><tr><th>名称</th><th>内容预览</th><th>操作</th></tr></thead>
+            <tbody id="prompts-tbody"></tbody>
           </table>
         </div>
       </div>
@@ -154,39 +150,17 @@
   </div>
 </div>
 
-<!-- 提示词模态框 -->
+<!-- 提示词编辑模态框 -->
 <div class="modal-overlay" id="prompt-modal">
   <div class="modal" style="width:680px">
     <div class="modal-header">
-      <span class="modal-title" id="prompt-modal-title">新增提示词</span>
+      <span class="modal-title" id="prompt-modal-title">编辑提示词</span>
       <span class="modal-close" onclick="Modal.close('prompt-modal')">✕</span>
     </div>
     <form id="prompt-form">
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">名称 <span style="color:red">*</span></label>
-          <input class="form-input" name="name" placeholder="意图识别提示词">
-        </div>
-        <div class="form-group">
-          <label class="form-label">类型</label>
-          <select class="form-select" name="template_type">
-            <option value="system">系统提示词</option>
-            <option value="intent">意图识别</option>
-          </select>
-        </div>
-      </div>
       <div class="form-group">
-        <label class="form-label">提示词内容（支持 {{.Message}} {{.ProjectInfo}} 等模板变量）</label>
-        <textarea class="form-textarea" name="content" rows="12" style="font-family:monospace"></textarea>
-      </div>
-      <div class="form-group">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-          <label class="toggle">
-            <input type="checkbox" name="enabled" checked>
-            <span class="toggle-slider"></span>
-          </label>
-          <span>启用</span>
-        </label>
+        <label class="form-label">提示词内容（支持 {{.Message}} 等模板变量，详见 tools/prompt/_example.md）</label>
+        <textarea class="form-textarea" name="content" rows="16" style="font-family:monospace;font-size:13px"></textarea>
       </div>
     </form>
     <div class="modal-footer">
@@ -198,7 +172,7 @@
 
 <script src="/static/app.js"></script>
 <script>
-let editingToolId = null, editingPromptId = null;
+let editingToolId = null;
 
 // ── 类型切换 ─────────────────────────────────────
 function onTypeChange(type) {
@@ -343,69 +317,41 @@ async function deleteTool(id, name) {
 }
 
 // ── 提示词 ───────────────────────────────────────
+let editingPromptName = null;
+
 async function loadPrompts() {
   const res = await API.get('/api/prompts');
   if (res.code !== 0) return;
   const rows = res.data || [];
+  document.getElementById('prompt-count').textContent = rows.length;
   const tbody = document.getElementById('prompts-tbody');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:24px">暂无模板</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="3" class="tool-empty">暂无提示词文件（请在 tools/prompt/ 下创建 .md 文件）</td></tr>';
     return;
   }
-  const tl = { system:'系统', intent:'意图识别' };
   tbody.innerHTML = rows.map(p => `
     <tr>
-      <td><strong>${escHtml(p.name)}</strong></td>
-      <td><span class="badge badge-default">${tl[p.template_type] || p.template_type}</span></td>
-      <td class="td-wrap" style="max-width:400px">${escHtml((p.content || '').substring(0, 80))}...</td>
-      <td>${p.enabled ? '<span class="badge badge-success">启用</span>' : '<span class="badge badge-default">禁用</span>'}</td>
-      <td style="white-space:nowrap">
-        <button class="btn btn-sm btn-default" onclick='editPrompt(${JSON.stringify(p).replace(/"/g,"&quot;")})'>编辑</button>
-        <button class="btn btn-sm btn-danger" onclick="deletePrompt('${p.id}','${escHtml(p.name)}')">删除</button>
-      </td>
+      <td><strong>${escHtml(p.name)}</strong>.md</td>
+      <td class="td-wrap" style="max-width:500px;font-size:12px;color:var(--gray-3)">${escHtml(truncate(p.content, 100))}</td>
+      <td><button class="btn btn-sm btn-default" onclick="editPrompt('${escHtml(p.name)}')">编辑</button></td>
     </tr>
   `).join('');
 }
 
-function openCreatePrompt() {
-  editingPromptId = null;
-  document.getElementById('prompt-modal-title').textContent = '新增提示词模板';
-  document.getElementById('prompt-form').reset();
-  document.querySelector('#prompt-form [name="enabled"]').checked = true;
-  Modal.open('prompt-modal');
-}
-
-function editPrompt(p) {
-  editingPromptId = p.id;
-  document.getElementById('prompt-modal-title').textContent = '编辑模板 - ' + p.name;
-  const form = document.getElementById('prompt-form');
-  form.querySelector('[name="name"]').value = p.name;
-  form.querySelector('[name="template_type"]').value = p.template_type;
-  form.querySelector('[name="content"]').value = p.content;
-  form.querySelector('[name="enabled"]').checked = p.enabled;
+async function editPrompt(name) {
+  editingPromptName = name;
+  document.getElementById('prompt-modal-title').textContent = '编辑提示词 — ' + name + '.md';
+  const res = await API.get('/api/prompts');
+  if (res.code !== 0) return;
+  const p = (res.data || []).find(x => x.name === name);
+  document.querySelector('#prompt-form [name="content"]').value = p ? p.content : '';
   Modal.open('prompt-modal');
 }
 
 async function savePrompt() {
-  const form = document.getElementById('prompt-form');
-  const data = {
-    name: form.querySelector('[name="name"]').value.trim(),
-    template_type: form.querySelector('[name="template_type"]').value,
-    content: form.querySelector('[name="content"]').value,
-    enabled: form.querySelector('[name="enabled"]').checked,
-  };
-  if (!data.name || !data.content) { Toast.info('名称和内容不能为空'); return; }
-  const res = editingPromptId
-    ? await API.put(`/api/prompts/${editingPromptId}`, data)
-    : await API.post('/api/prompts', data);
+  const content = document.querySelector('#prompt-form [name="content"]').value;
+  const res = await API.put(`/api/prompts/${editingPromptName}`, { content });
   if (res.code === 0) { Toast.success('保存成功'); Modal.close('prompt-modal'); loadPrompts(); }
-  else Toast.error(res.message);
-}
-
-async function deletePrompt(id, name) {
-  if (!confirm(`确认删除「${name}」？`)) return;
-  const res = await API.delete(`/api/prompts/${id}`);
-  if (res.code === 0) { Toast.success('删除成功'); loadPrompts(); }
   else Toast.error(res.message);
 }
 

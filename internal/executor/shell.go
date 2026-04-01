@@ -86,8 +86,9 @@ func expandHome(path string) string {
 }
 
 func truncateStr(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:n]) + "..."
 }

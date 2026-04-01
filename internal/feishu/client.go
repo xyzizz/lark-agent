@@ -207,7 +207,6 @@ func (c *Client) AddReaction(ctx context.Context, messageID, emojiType string) e
 	defer resp.Body.Close()
 	return nil
 }
-
 // TestConnection 测试飞书连接
 func (c *Client) TestConnection(ctx context.Context) error {
 	_, err := c.getToken(ctx)

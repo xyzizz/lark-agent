@@ -78,15 +78,6 @@ func migrate(db *sql.DB) error {
 			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`CREATE TABLE IF NOT EXISTS prompt_templates (
-			id            TEXT PRIMARY KEY,
-			name          TEXT NOT NULL UNIQUE,
-			template_type TEXT NOT NULL DEFAULT 'system',
-			content       TEXT NOT NULL DEFAULT '',
-			enabled       INTEGER NOT NULL DEFAULT 1,
-			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
 		`CREATE TABLE IF NOT EXISTS triggers (
 			id               TEXT PRIMARY KEY,
 			raw_message      TEXT NOT NULL DEFAULT '',
@@ -164,64 +155,10 @@ func migrate(db *sql.DB) error {
 	// 迁移：repo_path → repo_paths（旧列存在时转换数据）
 	migrateRepoPaths(db)
 
-	// 清理已废弃的提示词模板类型
-	db.Exec(`DELETE FROM prompt_templates WHERE template_type IN ('issue', 'requirement')`) //nolint
-
-	// 写入默认提示词模板（如果不存在）
-	if err := seedDefaultPrompts(db); err != nil {
-		log.Printf("[store] seed prompts warning: %v", err)
-	}
+	// 清理已废弃的 prompt_templates 表（提示词已迁移到 tools/prompt/*.md 文件）
+	db.Exec(`DROP TABLE IF EXISTS prompt_templates`) //nolint
 
 	log.Printf("[store] schema migration done")
-	return nil
-}
-
-// seedDefaultPrompts 写入默认提示词（幂等）
-func seedDefaultPrompts(db *sql.DB) error {
-	templates := []struct {
-		id, name, ttype, content string
-	}{
-		{
-			"tpl-system-default",
-			"系统默认提示词",
-			"system",
-			`你是一个专业的工程助手，负责分析飞书消息并执行相应的工程任务。
-你必须严格按照 JSON 格式输出结果，不得输出任何额外文字。
-保持专业、简洁、准确。`,
-		},
-		{
-			"tpl-intent-default",
-			"意图识别提示词",
-			"intent",
-			`请分析以下用户消息，判断意图类型。
-
-用户消息：
-{{.Message}}
-
-请严格按照如下 JSON 格式输出，不得有任何额外内容：
-{
-  "intent": "<issue_troubleshooting|requirement_writing|ignore|need_more_context|risky_action>",
-  "confidence": <0.0-1.0>,
-  "matched_keywords": ["<keyword1>", "<keyword2>"],
-  "suspected_project": "<project_name_or_empty>",
-  "need_repo_access": <true|false>,
-  "need_doc_access": <true|false>,
-  "need_db_query": <true|false>,
-  "risk_level": "<low|medium|high|critical>",
-  "summary": "<一句话摘要>"
-}`,
-		},
-	}
-
-	for _, t := range templates {
-		_, err := db.Exec(`
-			INSERT OR IGNORE INTO prompt_templates (id, name, template_type, content, enabled)
-			VALUES (?, ?, ?, ?, 1)
-		`, t.id, t.name, t.ttype, t.content)
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

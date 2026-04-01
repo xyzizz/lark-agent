@@ -54,17 +54,35 @@ func (r *Recognizer) Recognize(ctx context.Context, message string) (*model.Inte
 	return result, nil
 }
 
-// buildPrompt 渲染意图识别提示词
+// buildPrompt 渲染意图识别提示词（从文件加载模板）
 func (r *Recognizer) buildPrompt(message string) (string, error) {
-	// 优先从数据库读取提示词模板
-	tpl, err := store.GetPromptByType("intent")
-	if err != nil || tpl == nil {
-		// 使用内置默认模板
-		return buildDefaultIntentPrompt(message)
+	projectList := buildProjectList()
+
+	content, err := store.LoadPrompt("intent")
+	if err != nil {
+		return "", fmt.Errorf("load intent prompt: %w", err)
 	}
-	return renderTemplate(tpl.Content, map[string]string{
-		"Message": message,
+	return renderTemplate(content, map[string]string{
+		"Message":     message,
+		"ProjectList": projectList,
 	})
+}
+
+// buildProjectList 从 DB 读取所有已启用路由，构建项目列表文本
+func buildProjectList() string {
+	routes, err := store.ListRoutes(true)
+	if err != nil || len(routes) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, r := range routes {
+		keywords := ""
+		if len(r.Keywords) > 0 {
+			keywords = " (关键词: " + strings.Join(r.Keywords, ", ") + ")"
+		}
+		sb.WriteString(fmt.Sprintf("- %s%s\n", r.Name, keywords))
+	}
+	return sb.String()
 }
 
 // loadLLMConfig 从 DB 读取 LLM 配置，覆盖 YAML 中的空/零值
@@ -111,10 +129,10 @@ func (r *Recognizer) callLLM(ctx context.Context, userPrompt string) (string, er
 		return "", fmt.Errorf("LLM API key not configured（请在管理后台→飞书配置页填写）")
 	}
 
-	// 从 DB 读取系统提示词
-	sysPromptContent := "你是意图识别助手，只输出 JSON，不得有额外文字。"
-	if sysTpl, err := store.GetPromptByType("system"); err == nil && sysTpl != nil {
-		sysPromptContent = sysTpl.Content
+	// 从文件读取系统提示词
+	sysPromptContent, err := store.LoadPrompt("system")
+	if err != nil {
+		return "", fmt.Errorf("load system prompt: %w", err)
 	}
 
 	payload := map[string]any{
@@ -174,35 +192,6 @@ func (r *Recognizer) callLLM(ctx context.Context, userPrompt string) (string, er
 
 // ─── 工具函数 ─────────────────────────────────────────────────
 
-func buildDefaultIntentPrompt(message string) (string, error) {
-	const tmpl = `请分析以下用户消息，判断意图类型。
-
-用户消息：
-{{.Message}}
-
-请严格按照如下 JSON 格式输出，不得有任何额外内容：
-{
-  "intent": "<issue_troubleshooting|requirement_writing|ignore|need_more_context|risky_action>",
-  "confidence": <0.0到1.0之间的数字>,
-  "matched_keywords": ["<keyword1>"],
-  "suspected_project": "<猜测的项目名，无则空字符串>",
-  "need_repo_access": <true|false>,
-  "need_doc_access": <true|false>,
-  "need_db_query": <true|false>,
-  "risk_level": "<low|medium|high|critical>",
-  "summary": "<一句话摘要，不超过50字>"
-}
-
-intent 含义：
-- issue_troubleshooting: 线上问题、bug、报错、数据异常
-- requirement_writing: 新功能、需求、优化、改动
-- ignore: 闲聊、打招呼、无关内容
-- need_more_context: 信息不足无法判断
-- risky_action: 危险操作，如删库、强制部署`
-
-	return renderTemplate(tmpl, map[string]string{"Message": message})
-}
-
 func renderTemplate(tmplStr string, data map[string]string) (string, error) {
 	t, err := template.New("").Parse(tmplStr)
 	if err != nil {
@@ -216,10 +205,11 @@ func renderTemplate(tmplStr string, data map[string]string) (string, error) {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:n]) + "..."
 }
 
 // CallLLMRaw 供工作流模块直接调用 LLM 的通用方法

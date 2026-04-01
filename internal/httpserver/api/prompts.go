@@ -8,52 +8,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ListPrompts 列出所有提示词文件
 func ListPrompts(c *gin.Context) {
 	prompts, err := store.ListPrompts()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.APIResponse{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, model.APIResponse{Code: 1, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "ok", Data: prompts})
+	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Data: prompts})
 }
 
-func CreatePrompt(c *gin.Context) {
-	var p model.PromptTemplate
-	if err := c.ShouldBindJSON(&p); err != nil {
-		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Message: err.Error()})
-		return
-	}
-	if p.Name == "" || p.Content == "" {
-		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Message: "name and content are required"})
-		return
-	}
-	if err := store.CreatePrompt(&p); err != nil {
-		c.JSON(http.StatusInternalServerError, model.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "created", Data: p})
-}
-
+// UpdatePrompt 更新提示词文件内容
 func UpdatePrompt(c *gin.Context) {
-	id := c.Param("id")
-	var p model.PromptTemplate
-	if err := c.ShouldBindJSON(&p); err != nil {
-		c.JSON(http.StatusBadRequest, model.APIResponse{Code: 400, Message: err.Error()})
+	name := c.Param("name")
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusOK, model.APIResponse{Code: 1, Message: "参数错误"})
 		return
 	}
-	p.ID = id
-	if err := store.UpdatePrompt(&p); err != nil {
-		c.JSON(http.StatusInternalServerError, model.APIResponse{Code: 500, Message: err.Error()})
+	if err := store.SavePrompt(name, body.Content); err != nil {
+		c.JSON(http.StatusOK, model.APIResponse{Code: 1, Message: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "updated"})
-}
-
-func DeletePrompt(c *gin.Context) {
-	id := c.Param("id")
-	if err := store.DeletePrompt(id); err != nil {
-		c.JSON(http.StatusInternalServerError, model.APIResponse{Code: 500, Message: err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "deleted"})
+	c.JSON(http.StatusOK, model.APIResponse{Code: 0, Message: "保存成功"})
 }

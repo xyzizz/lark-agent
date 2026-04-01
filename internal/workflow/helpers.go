@@ -1,11 +1,11 @@
 package workflow
 
 import (
-	"context"
-	"feishu-agent/internal/executor"
+	"bytes"
 	"feishu-agent/internal/model"
 	"feishu-agent/internal/store"
 	"fmt"
+	"text/template"
 
 	"github.com/google/uuid"
 )
@@ -48,12 +48,42 @@ func AuditAction(triggerID, action, riskLevel, detail, result string) {
 	}) //nolint
 }
 
-// truncate 截断字符串
+// truncate 截断字符串（rune 安全）
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:n]) + "..."
+}
+
+// renderPromptTemplate 渲染提示词模板（Go text/template）
+func renderPromptTemplate(tmplStr string, data map[string]string) (string, error) {
+	t, err := template.New("").Parse(tmplStr)
+	if err != nil {
+		return "", fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err = t.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("execute template: %w", err)
+	}
+	return buf.String(), nil
+}
+
+// buildReposText 将路由的仓库列表格式化为文本
+func buildReposText(route *model.ProjectRoute) string {
+	if route == nil || len(route.Repos) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	for _, r := range route.Repos {
+		desc := ""
+		if r.Description != "" {
+			desc = " — " + r.Description
+		}
+		buf.WriteString(fmt.Sprintf("- 仓库: %s%s\n", r.Path, desc))
+	}
+	return buf.String()
 }
 
 // ─── 多仓库工具函数 ─────────────────────────────────────────────
@@ -66,84 +96,3 @@ func primaryRepoPath(route *model.ProjectRoute) string {
 	return route.Repos[0].Path
 }
 
-// repoPaths 返回路由的所有仓库路径
-func repoPaths(route *model.ProjectRoute) []string {
-	if route == nil {
-		return nil
-	}
-	var paths []string
-	for _, r := range route.Repos {
-		if r.Path != "" {
-			paths = append(paths, r.Path)
-		}
-	}
-	return paths
-}
-
-// handleGitOps 对单个仓库执行 git 操作（创建分支、提交、推送、MR）
-func handleGitOps(ctx context.Context, wfCtx *model.WorkflowContext, repoPath, prefix, summary string) string {
-	git := executor.NewGitExecutor(repoPath)
-	branchName := executor.GenerateBranchName(prefix, wfCtx.TriggerID)
-
-	// 检查是否有改动
-	statusR, _ := git.Status(ctx)
-	if statusR != nil && statusR.Output == "" {
-		return "" // 无改动，跳过
-	}
-
-	// 创建分支
-	step := logStep(wfCtx, "create_branch", "git", fmt.Sprintf("%s @ %s", branchName, repoPath))
-	AuditAction(wfCtx.TriggerID, "git.create_branch", "low", branchName, "")
-	gitR, err := git.CreateBranch(ctx, branchName)
-	if err != nil {
-		finishStep(step, gitR.Output, err.Error())
-		return ""
-	}
-	finishStep(step, gitR.Output, "")
-
-	mrLink := ""
-	if wfCtx.AutoCommit {
-		step = logStep(wfCtx, "git_commit", "git", repoPath)
-		AuditAction(wfCtx.TriggerID, "git.commit", "low", branchName, "")
-		git.Add(ctx) //nolint
-		cMsg := fmt.Sprintf("%s: %s [agent]", prefix, truncate(wfCtx.Message.Content, 60))
-		gitR, err = git.Commit(ctx, cMsg)
-		if err != nil {
-			finishStep(step, gitR.Output, err.Error())
-			return ""
-		}
-		finishStep(step, gitR.Output, "")
-
-		if wfCtx.AutoPush {
-			step = logStep(wfCtx, "git_push", "git", branchName)
-			AuditAction(wfCtx.TriggerID, "git.push", "medium", branchName, "")
-			gitR, err = git.PushSetUpstream(ctx, "origin", branchName)
-			if err != nil {
-				finishStep(step, gitR.Output, err.Error())
-				return ""
-			}
-			finishStep(step, gitR.Output, "")
-
-			if wfCtx.AutoMR {
-				step = logStep(wfCtx, "create_mr", "git", repoPath)
-				AuditAction(wfCtx.TriggerID, "mr.create", "medium", branchName, "")
-				mrCreator := &executor.NoopMRCreator{}
-				mrReq := &model.MRRequest{
-					RepoPath:   repoPath,
-					Branch:     branchName,
-					BaseBranch: "main",
-					Title:      fmt.Sprintf("[Agent] %s: %s", prefix, truncate(wfCtx.Message.Content, 50)),
-					Description: summary,
-				}
-				mrResult, merr := mrCreator.CreateMR(ctx, mrReq)
-				if merr == nil {
-					mrLink = mrResult.URL
-					finishStep(step, mrLink, "")
-				} else {
-					finishStep(step, "", merr.Error())
-				}
-			}
-		}
-	}
-	return mrLink
-}

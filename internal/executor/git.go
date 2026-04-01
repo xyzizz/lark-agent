@@ -109,35 +109,6 @@ type MRCreator interface {
 	CreateMR(ctx context.Context, req *model.MRRequest) (*model.MRResult, error)
 }
 
-// GitLabMRCreator GitLab MR 创建器（示例实现）
-type GitLabMRCreator struct {
-	BaseURL string
-	Token   string
-}
-
-func (g *GitLabMRCreator) CreateMR(ctx context.Context, req *model.MRRequest) (*model.MRResult, error) {
-	// TODO: 调用 GitLab API 创建 MR
-	// POST /api/v4/projects/:id/merge_requests
-	// 此处返回占位结果，后续按需实现
-	return &model.MRResult{
-		URL:   fmt.Sprintf("[gitlab] branch: %s -> %s", req.Branch, req.BaseBranch),
-		Error: "",
-	}, nil
-}
-
-// GithubPRCreator GitHub PR 创建器（示例实现）
-type GithubPRCreator struct {
-	Token string
-}
-
-func (g *GithubPRCreator) CreateMR(ctx context.Context, req *model.MRRequest) (*model.MRResult, error) {
-	// TODO: 调用 GitHub API 创建 PR
-	// POST /repos/{owner}/{repo}/pulls
-	return &model.MRResult{
-		URL: fmt.Sprintf("[github] branch: %s -> %s", req.Branch, req.BaseBranch),
-	}, nil
-}
-
 // NoopMRCreator 空实现（dry-run 模式或未配置时使用）
 type NoopMRCreator struct{}
 

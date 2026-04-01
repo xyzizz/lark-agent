@@ -46,17 +46,6 @@ type ToolConfig struct {
 	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// PromptTemplate 提示词模板
-type PromptTemplate struct {
-	ID           string    `json:"id" db:"id"`
-	Name         string    `json:"name" db:"name"`
-	TemplateType string    `json:"template_type" db:"template_type"` // system | intent | issue | requirement
-	Content      string    `json:"content" db:"content"`
-	Enabled      bool      `json:"enabled" db:"enabled"`
-	CreatedAt    time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
-}
-
 // Trigger 每次消息触发的主记录
 type Trigger struct {
 	ID             string     `json:"id" db:"id"`
@@ -130,11 +119,8 @@ type IntentResult struct {
 	Confidence       float64  `json:"confidence"`        // 0.0 ~ 1.0
 	MatchedKeywords  []string `json:"matched_keywords"`  // 命中的关键词
 	SuspectedProject string   `json:"suspected_project"` // 猜测的项目名
-	NeedRepoAccess   bool     `json:"need_repo_access"`
-	NeedDocAccess    bool     `json:"need_doc_access"`
-	NeedDBQuery      bool     `json:"need_db_query"`
-	RiskLevel        string   `json:"risk_level"` // low | medium | high | critical
-	Summary          string   `json:"summary"`    // 一句话摘要
+	RiskLevel        string   `json:"risk_level"`        // low | medium | high | critical
+	Summary          string   `json:"summary"`           // 一句话摘要
 }
 
 // IntentType 意图类型常量
@@ -194,24 +180,20 @@ type MCPResponse struct {
 
 // ClaudeExecRequest Claude Code 执行请求
 type ClaudeExecRequest struct {
-	RepoPath     string `json:"repo_path"`
-	TaskType     string `json:"task_type"`   // issue | requirement
-	TriggerID    string `json:"trigger_id"`  // 用于日志文件命名
-	SystemPrompt string `json:"system_prompt"`
-	UserPrompt   string `json:"user_prompt"`
-	Context      string `json:"context"`     // 附加上下文
-	DryRun       bool   `json:"dry_run"`
+	RepoPath   string `json:"repo_path"`
+	TaskType   string `json:"task_type"`  // issue | requirement
+	TriggerID  string `json:"trigger_id"` // 用于日志文件命名
+	UserPrompt string `json:"user_prompt"`
+	DryRun     bool   `json:"dry_run"`
 }
 
 // ClaudeExecResult Claude Code 执行结果
 type ClaudeExecResult struct {
-	Plan         string   `json:"plan"`          // 修改计划
-	Summary      string   `json:"summary"`       // 执行摘要
-	FilesChanged []string `json:"files_changed"` // 修改的文件列表
-	SQLSuggestions []string `json:"sql_suggestions"` // SQL 建议
-	Logs         []string `json:"logs"`          // 执行日志
-	Success      bool     `json:"success"`
-	Error        string   `json:"error"`
+	Plan    string   `json:"plan"`    // 完整输出
+	Summary string   `json:"summary"` // 执行摘要
+	Logs    []string `json:"logs"`    // 执行日志
+	Success bool     `json:"success"`
+	Error   string   `json:"error"`
 }
 
 // ─── Git 操作 ────────────────────────────────────────────────

@@ -13,6 +13,57 @@ import (
 // toolsBaseDir 工具文件根目录
 const toolsBaseDir = "./tools"
 
+// PromptInfo 提示词文件信息
+type PromptInfo struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// ListPrompts 列出 tools/prompt/ 下所有 .md 文件（跳过下划线开头）
+func ListPrompts() ([]PromptInfo, error) {
+	dir := filepath.Join(toolsBaseDir, "prompt")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var prompts []PromptInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		content, err := LoadPrompt(name)
+		if err != nil {
+			continue
+		}
+		prompts = append(prompts, PromptInfo{Name: name, Content: content})
+	}
+	return prompts, nil
+}
+
+// LoadPrompt 从 tools/prompt/{name}.md 读取提示词内容
+func LoadPrompt(name string) (string, error) {
+	path := filepath.Join(toolsBaseDir, "prompt", name+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("load prompt %s: %w", name, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SavePrompt 保存提示词到 tools/prompt/{name}.md
+func SavePrompt(name, content string) error {
+	dir := filepath.Join(toolsBaseDir, "prompt")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir prompt: %w", err)
+	}
+	path := filepath.Join(dir, name+".md")
+	return os.WriteFile(path, []byte(content+"\n"), 0644)
+}
+
 // toolFileJSON MCP/Shell 的 JSON 文件格式
 type toolFileJSON struct {
 	Description  string          `json:"description"`

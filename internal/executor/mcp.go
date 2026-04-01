@@ -156,12 +156,3 @@ func InitMCPClients() error {
 	return nil
 }
 
-// CallMCP 便捷函数：按名称调用 MCP 工具
-func CallMCP(ctx context.Context, name, method string, params map[string]any) (*model.MCPResponse, error) {
-	client, ok := globalRegistry.Get(name)
-	if !ok {
-		// 未注册的 MCP，返回 mock 结果
-		client = NewMockMCPClient(name)
-	}
-	return client.Call(ctx, method, params)
-}

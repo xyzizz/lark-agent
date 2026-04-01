@@ -108,11 +108,9 @@ func (s *Server) setup() {
 		apiGroup.PUT("/tools/:id", api.UpdateTool)
 		apiGroup.DELETE("/tools/:id", api.DeleteTool)
 
-		// 提示词模板
+		// 提示词（文件存储）
 		apiGroup.GET("/prompts", api.ListPrompts)
-		apiGroup.POST("/prompts", api.CreatePrompt)
-		apiGroup.PUT("/prompts/:id", api.UpdatePrompt)
-		apiGroup.DELETE("/prompts/:id", api.DeletePrompt)
+		apiGroup.PUT("/prompts/:name", api.UpdatePrompt)
 
 		// 触发记录
 		apiGroup.GET("/triggers", api.ListTriggers)
